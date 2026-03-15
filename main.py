@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+"""
+Raspberry Pi 4 Home Automation System - Main Application
+
+This is the main entry point for the home automation system featuring:
+- Motion detection with LD2420 radar and GPIO sensors
+- Automated video recording on motion
+- Telegram bot for remote monitoring and control
+- ESP device integration for smart lighting
+- InfluxDB logging for data analytics
+
+Usage:
+    python main.py
+
+Environment Variables (optional):
+    TELEGRAM_BOT_TOKEN: Override default bot token
+    TELEGRAM_CHAT_ID: Override default chat ID
+    INFLUXDB_TOKEN: Override default InfluxDB token
+
+Author: Raspberry Pi Home Automation
+Version: 26.01.27
+"""
+import logging
+import logging.handlers
+import os
+import signal
+import sys
+import threading
+import time
+import traceback
+from datetime import datetime
+from typing import Optional
+
+from config import AppConfig, config
+from telegram_handler import TelegramHandler
+from sensors import SensorManager
+from video_recorder import VideoRecorder, RecordingResult
+from esp_devices import ESPDeviceManager
+from influxdb_logger import InfluxDBLogger
+from bot_commands import BotCommandHandler
+
+__version__ = '26.01.27'
+__author__ = 'Raspberry Pi Home Automation'
+
+logger = logging.getLogger(__name__)
+
+
+class RaspberryPiController:
+    """
+    Main controller for the Raspberry Pi home automation system.
+
+    Coordinates all subsystems:
+    - Telegram bot for remote control
+    - Motion sensors (radar, PIR, MMS)
+    - Video recording
+    - ESP device control
+    - InfluxDB logging
+
+    Example:
+        controller = RaspberryPiController()
+        controller.start()
+    """
+
+    def __init__(self, app_config: Optional[AppConfig] = None):
+        """
+        Initialize the controller.
+
+        Args:
+            app_config: Application configuration. Uses global config if None.
+        """
+        self.config = app_config or config
+        self._running = False
+        self._shutdown_event = threading.Event()
+
+        # Software watchdog
+        self._watchdog_last_ping: float = time.time()
+        self._watchdog_timeout: int = 60   # seconds — restart if loop frozen this long
+        self._watchdog_thread: Optional[threading.Thread] = None
+
+        # Subsystem instances
+        self.telegram: Optional[TelegramHandler] = None
+        self.sensors: Optional[SensorManager] = None
+        self.recorder: Optional[VideoRecorder] = None
+        self.esp: Optional[ESPDeviceManager] = None
+        self.influx: Optional[InfluxDBLogger] = None
+        self.bot_handler: Optional[BotCommandHandler] = None
+
+        # Motion detection state
+        self._last_motion_time: float = 0
+        self._last_light_activation: float = 0
+        self._last_motion_message_time: float = 0
+        self._recording_start_time: float = 0
+        self._prev_motion_state: bool = False
+        self._motion_stable_start: float = 0
+
+        # Setup logging
+        self._setup_logging()
+
+    def _setup_logging(self) -> None:
+        """Configure application logging with rotation to prevent large log files."""
+        # Create log directory if needed
+        log_dir = os.path.dirname(self.config.log_file_path)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+
+        log_format = logging.Formatter(
+            '%(asctime)s - %(levelname)s - %(name)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+
+        # Rotating file handler: max 1MB per file, keep 3 backups
+        # Total max log storage: 4MB (error_log.txt + .1 + .2 + .3)
+        file_handler = logging.handlers.RotatingFileHandler(
+            self.config.log_file_path,
+            maxBytes=1 * 1024 * 1024,  # 1 MB
+            backupCount=3
+        )
+        file_handler.setFormatter(log_format)
+
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setFormatter(log_format)
+
+        # Configure root logger
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.INFO)
+        root_logger.addHandler(file_handler)
+        root_logger.addHandler(console_handler)
+
+    def initialize(self) -> bool:
+        """
+        Initialize all subsystems.
+
+        Returns:
+            True if initialization successful, False otherwise
+        """
+        logger.info("=" * 50)
+        logger.info("Initializing Raspberry Pi Controller")
+        logger.info(f"Version: {self.config.script_version}")
+        logger.info("=" * 50)
+
+        try:
+            # Initialize Telegram handler
+            logger.info("Initializing Telegram handler...")
+            self.telegram = TelegramHandler(self.config.telegram)
+            if not self.telegram.start():
+                logger.error("Failed to initialize Telegram handler")
+                return False
+            logger.info("Telegram handler: OK")
+
+            # Initialize ESP device manager
+            logger.info("Initializing ESP device manager...")
+            self.esp = ESPDeviceManager(self.config.esp_devices)
+            logger.info("ESP device manager: OK")
+
+            # Initialize InfluxDB logger
+            logger.info("Initializing InfluxDB logger...")
+            self.influx = InfluxDBLogger(self.config.influxdb)
+            if self.influx.connect():
+                logger.info("InfluxDB logger: OK")
+            else:
+                logger.warning("InfluxDB connection failed - logging disabled")
+
+            # Initialize sensor manager
+            logger.info("Initializing sensor manager...")
+            self.sensors = SensorManager(self.config.gpio, self.config.radar)
+            if self.sensors.initialize():
+                logger.info("Sensor manager: OK")
+                self.sensors.set_door_callbacks(
+                    on_open=self._on_door_open,
+                    on_close=self._on_door_close
+                )
+            else:
+                logger.warning("Sensor initialization partial - some sensors unavailable")
+
+            # Initialize video recorder
+            logger.info("Initializing video recorder...")
+            self.recorder = VideoRecorder(self.config.video)
+            self.recorder.set_callbacks(
+                on_complete=self._on_recording_complete,
+                on_cleanup=self._on_disk_cleanup
+            )
+            if self.recorder.initialize():
+                logger.info("Video recorder: OK")
+            else:
+                logger.warning("Camera initialization failed - recording disabled")
+
+            # Initialize bot command handler
+            logger.info("Initializing bot command handler...")
+            self.bot_handler = BotCommandHandler(
+                config=self.config,
+                telegram_handler=self.telegram,
+                esp_manager=self.esp,
+                video_recorder=self.recorder,
+                influx_logger=self.influx
+            )
+
+            # Start bot message loop
+            self.telegram.start_message_loop(self.bot_handler.handle_message)
+            logger.info("Bot message loop: Started")
+
+            # Register commands with Telegram menu (shows on '/' press)
+            self.telegram.set_my_commands(self.bot_handler.get_commands_list())
+            logger.info("Bot commands menu: Registered")
+
+            logger.info("=" * 50)
+            logger.info("Initialization complete")
+            logger.info("=" * 50)
+            return True
+
+        except Exception as e:
+            logger.error(f"Initialization error: {e}")
+            logger.error(traceback.format_exc())
+            return False
+
+    def start(self) -> None:
+        """Start the main control loop."""
+        if not self.initialize():
+            logger.error("Initialization failed, exiting")
+            return
+
+        # Send startup notification
+        self._send_startup_message()
+
+        # Setup signal handlers
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+
+        self._running = True
+        logger.info("Starting main loop...")
+
+        # Start software watchdog thread
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            name="SoftwareWatchdog",
+            daemon=True
+        )
+        self._watchdog_thread.start()
+        logger.info(f"Software watchdog started (timeout: {self._watchdog_timeout}s)")
+
+        # Wait for sensors to stabilize
+        logger.info("Waiting for sensors to stabilize (5 seconds)...")
+        time.sleep(5)
+        logger.info("Sensors ready - monitoring started")
+
+        try:
+            self._main_loop()
+        except KeyboardInterrupt:
+            logger.info("Keyboard interrupt received")
+        except Exception as e:
+            logger.error(f"Main loop error: {e}")
+            logger.error(traceback.format_exc())
+            if self.telegram:
+                self.telegram.send_text(f"Main loop error: {e}")
+        finally:
+            self.cleanup()
+
+    def _watchdog_loop(self) -> None:
+        """Software watchdog — exits process if main loop stops responding."""
+        while self._running:
+            time.sleep(10)  # check every 10 seconds
+            elapsed = time.time() - self._watchdog_last_ping
+            if elapsed > self._watchdog_timeout:
+                logger.critical(
+                    f"WATCHDOG: Main loop frozen for {elapsed:.0f}s "
+                    f"(timeout={self._watchdog_timeout}s) — forcing restart"
+                )
+                if self.telegram:
+                    self.telegram.send_text(
+                        f"⚠️ Watchdog triggered — main loop frozen {elapsed:.0f}s. Restarting..."
+                    )
+                time.sleep(2)  # allow telegram message to send
+                sys.exit(1)    # systemd will restart the service
+
+    def _main_loop(self) -> None:
+        """Main control loop - monitors sensors and handles events."""
+        while self._running and not self._shutdown_event.is_set():
+            try:
+                time.sleep(0.2)  # 200ms loop interval
+
+                # Pet the software watchdog
+                self._watchdog_last_ping = time.time()
+
+                # Check if motion detection is enabled
+                if self.bot_handler and not self.bot_handler.is_motion_enabled():
+                    continue
+
+                # Check sensors
+                if self.sensors and self.sensors.radar.is_initialized:
+                    motion_detected = self.sensors.radar.check_motion()
+
+                    # Update status LED
+                    self.sensors.set_led(motion_detected)
+
+                    # Process motion event
+                    self._process_motion(motion_detected)
+
+                # Check door sensor
+                if self.sensors:
+                    self.sensors.check_door()
+
+            except Exception as e:
+                logger.error(f"Loop iteration error: {e}")
+
+    def _process_motion(self, motion_detected: bool) -> None:
+        """
+        Process motion detection events.
+
+        Args:
+            motion_detected: True if motion is currently detected
+        """
+        current_time = time.time()
+        motion_state_changed = (motion_detected != self._prev_motion_state)
+        self._prev_motion_state = motion_detected
+
+        if motion_detected:
+            self._last_motion_time = current_time
+
+            # Trigger light on motion start
+            if motion_state_changed:
+                self._trigger_light_control()
+
+            # Handle video recording
+            if self.bot_handler and self.bot_handler.is_video_recording_enabled():
+                self._handle_video_recording(current_time)
+
+            # Handle InfluxDB logging
+            self._handle_influx_logging(motion_detected, motion_state_changed, current_time)
+
+            # Send motion notification (throttled)
+            if motion_state_changed:
+                cooldown = self.config.motion_message_cooldown
+                if current_time - self._last_motion_message_time > cooldown:
+                    self.telegram.send_text("Motion detected by LD2420 radar sensor")
+                    self._last_motion_message_time = current_time
+
+        else:
+            # Motion stopped
+            if motion_state_changed:
+                if self.influx:
+                    self.influx.log_motion_state(False)
+                self._motion_stable_start = 0
+
+            # Check if recording should stop
+            self._check_stop_recording(current_time)
+
+    def _trigger_light_control(self) -> None:
+        """Activate light on motion during night hours."""
+        current_time = time.time()
+        current_hour = datetime.now().hour
+
+        # Only during night (6PM - 8AM)
+        if not (current_hour < 8 or current_hour >= 18):
+            return
+
+        # Check cooldown
+        if current_time - self._last_light_activation < self.config.light_cooldown:
+            return
+
+        self._last_light_activation = current_time
+
+        def activate():
+            try:
+                success, response = self.esp.send_to_lobby("motion")
+                if success:
+                    logger.debug(f"Light activated: {response}")
+            except Exception as e:
+                logger.error(f"Light activation error: {e}")
+
+        threading.Thread(target=activate, daemon=True).start()
+
+    def _handle_video_recording(self, current_time: float) -> None:
+        """Handle video recording logic."""
+        if not self.recorder:
+            return
+
+        if not self.recorder.is_recording:
+            self._recording_start_time = current_time
+            filename = time.strftime("%d%b%y_%H%M%S")
+            self.recorder.start_recording(filename, max_duration=120)
+            logger.info(f"Recording started: {filename}")
+        else:
+            self.recorder.extend_recording()
+
+    def _check_stop_recording(self, current_time: float) -> None:
+        """Check if recording should be stopped."""
+        if not self.recorder or not self.recorder.is_recording:
+            return
+
+        # Never auto-stop a manual recording — it runs its full duration
+        if self.recorder.is_manual_recording:
+            return
+
+        time_since_motion = current_time - self._last_motion_time
+        total_duration = self.recorder.recording_duration  # use recorder's own timer
+        min_dur = self.config.video.min_duration
+        max_dur = self.config.video.max_duration
+
+        should_stop = (
+            (time_since_motion > 5 and total_duration >= min_dur) or
+            total_duration >= max_dur
+        )
+
+        if should_stop:
+            self.recorder.stop_recording()
+            reason = "max duration" if total_duration >= max_dur else "no motion"
+            logger.info(f"Recording stopped: {reason} (duration: {total_duration:.1f}s)")
+
+    def _handle_influx_logging(
+        self,
+        motion_detected: bool,
+        state_changed: bool,
+        current_time: float
+    ) -> None:
+        """Handle InfluxDB motion logging with stability check."""
+        if not self.influx:
+            return
+
+        if self._motion_stable_start == 0:
+            self._motion_stable_start = current_time
+            return
+
+        # Wait for 2 seconds of stable motion
+        if current_time - self._motion_stable_start >= 2:
+            self.influx.log_motion_state(motion_detected)
+
+    def _on_door_open(self) -> None:
+        """Callback when door opens."""
+        if self.telegram:
+            self.telegram.send_text("Door is OPEN now")
+
+    def _on_door_close(self) -> None:
+        """Callback when door closes."""
+        if self.telegram:
+            self.telegram.send_text("Door is CLOSED now")
+
+    def _on_recording_complete(self, result: RecordingResult) -> None:
+        """Callback when video recording completes."""
+        if result.success:
+            if self.bot_handler and self.bot_handler.is_bot_video_enabled():
+                self.telegram.send_video(result.file_path)
+                logger.info(f"Video sent: {result.file_path} ({result.duration:.1f}s)")
+        else:
+            if self.telegram:
+                self.telegram.send_text(f"Recording error: {result.error_message}")
+
+    def _on_disk_cleanup(self, files_removed: int, space_freed: float) -> None:
+        """Callback when disk cleanup occurs."""
+        if self.telegram:
+            msg = (
+                f"Automatic cleanup:\n"
+                f"Removed {files_removed} files\n"
+                f"Freed {space_freed:.1f} MB"
+            )
+            self.telegram.send_text(msg)
+
+    def _send_startup_message(self) -> None:
+        """Send startup notification."""
+        now = datetime.now()
+        formatted_time = now.strftime('%A %d/%m/%y %I:%M:%S %p')
+
+        msg = (
+            f"Raspberry Pi 4 Home Automation\n"
+            f"{'=' * 30}\n"
+            f"Version: {self.config.script_version}\n"
+            f"Updated: {self.config.last_updated}\n"
+            f"Started: {formatted_time}"
+        )
+
+        logger.info(msg)
+        if self.telegram:
+            self.telegram.send_text(msg)
+
+            # Camera status
+            camera_status = "OK" if (self.recorder and self.recorder._camera) else "Not available"
+            self.telegram.send_text(f"Camera: {camera_status}")
+
+    def _signal_handler(self, signum: int, frame) -> None:
+        """Handle shutdown signals."""
+        logger.info(f"Received signal {signum}, initiating shutdown...")
+        self._running = False
+        self._shutdown_event.set()
+
+    def cleanup(self) -> None:
+        """Cleanup all resources."""
+        logger.info("Cleaning up resources...")
+
+        if self.recorder:
+            logger.info("Closing video recorder...")
+            self.recorder.close()
+
+        if self.sensors:
+            logger.info("Cleaning up sensors...")
+            self.sensors.cleanup()
+
+        if self.influx:
+            logger.info("Closing InfluxDB connection...")
+            self.influx.close()
+
+        if self.telegram:
+            logger.info("Stopping Telegram handler...")
+            self.telegram.stop()
+
+        logger.info("Cleanup complete. Goodbye!")
+
+
+def main():
+    """Application entry point."""
+    print(f"\nRaspberry Pi 4 Home Automation System v{__version__}")
+    print("=" * 50)
+
+    controller = RaspberryPiController()
+    controller.start()
+
+
+if __name__ == "__main__":
+    main()

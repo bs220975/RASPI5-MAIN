@@ -1,0 +1,33 @@
+# Raspberry Pi 4 Home Automation System - Dependencies
+# Install with: pip install -r requirements.txt
+
+# === Core Dependencies ===
+telepot>=12.7                  # Telegram Bot API
+requests>=2.28.0               # HTTP client for ESP device communication
+psutil>=5.9.0                  # System utilities (disk, CPU, memory)
+Pillow>=9.0.0                  # Image processing
+pytz>=2023.3                   # Timezone support
+
+# === Data & Visualization ===
+influxdb-client>=1.36.0        # InfluxDB 2.x client
+matplotlib>=3.5.0              # Plotting sensor data
+tabulate>=0.9.0                # Table formatting
+prettytable>=3.0.0             # Pretty table output
+
+# === PDF Generation ===
+reportlab>=3.6.0               # PDF generation
+python-dateutil>=2.8.0         # Date parsing
+
+# === Raspberry Pi Specific (install only on Pi) ===
+# Uncomment these when running on Raspberry Pi:
+# RPi.GPIO>=0.7.0              # GPIO access
+# gpiozero>=1.6.0              # High-level GPIO interface
+# picamera2>=0.3.0             # Camera interface for Pi
+# pyserial>=3.5                # Serial port for radar sensor
+
+# === Development (optional) ===
+# pytest>=7.0.0                # Testing
+# pytest-cov>=4.0.0            # Coverage reporting
+# mypy>=1.0.0                  # Type checking
+# black>=23.0.0                # Code formatting
+# flake8>=6.0.0                # Linting
