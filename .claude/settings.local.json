@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(iwgetid:*)",
+      "Bash(speedtest-cli:*)",
+      "Bash(git:*)",
+      "Bash(which gh:*)",
+      "Bash(gh auth:*)",
+      "Bash(gh repo:*)",
+      "Bash(gh api:*)",
+      "Bash(ps aux:*)",
+      "Bash(grep:*)"
+    ]
+  }
+}

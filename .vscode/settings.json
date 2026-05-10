@@ -1,0 +1,8 @@
+{
+    "python.defaultInterpreterPath": "/home/pi/myenv/bin/python",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.env.linux": {
+        "VIRTUAL_ENV": "/home/pi/myenv",
+        "PATH": "/home/pi/myenv/bin:${env:PATH}"
+    }
+}

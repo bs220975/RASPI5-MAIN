@@ -153,13 +153,14 @@ class ESPDeviceConfig:
     Format: 'device_name': 'ip_address:port'
     """
     devices: Dict[str, str] = field(default_factory=lambda: {
-        'ESP01_Lobby': '192.168.1.85:1085',
+        'ESP01_Lobby': '192.168.1.85',
         'ESP01_Porch': '192.168.1.89:1089',
         'ESP32_OLED': '192.168.1.102:1020',
         'ESP32_GSM': '192.168.1.91:9191',
         'ESP32_ENERGY': '192.168.1.131:1031',
         'ESP8266_DHT': '192.168.1.107:1007',
         'ESP32_Test': '192.168.1.132:1032',
+        'ESP01_Relay': '192.168.1.85',
     })
     request_timeout: int = 5  # seconds
 
@@ -210,19 +211,16 @@ class GPIOConfig:
     Attributes:
         mms_sensor_pin: Microwave motion sensor pin
         pir_sensor_pin: PIR motion sensor pin
-        reed_switch_pin: Door reed switch pin
         led_pin: Status LED pin
     """
     mms_sensor_pin: int = 27
     pir_sensor_pin: int = 25
-    reed_switch_pin: int = 26
     led_pin: int = 18
 
     def validate(self) -> bool:
         """Validate GPIO pin numbers are in valid range."""
         valid_pins = set(range(2, 28))  # BCM GPIO 2-27
-        pins = [self.mms_sensor_pin, self.pir_sensor_pin,
-                self.reed_switch_pin, self.led_pin]
+        pins = [self.mms_sensor_pin, self.pir_sensor_pin, self.led_pin]
 
         for pin in pins:
             if pin not in valid_pins:
@@ -322,8 +320,8 @@ class AppConfig:
     radar: RadarConfig = field(default_factory=RadarConfig)
 
     # Application metadata
-    script_version: str = 'V26.01.27'
-    last_updated: str = '27 January 2026'
+    script_version: str = 'V26.04.30'
+    last_updated: str = '30 April 2026'
 
     # Paths
     log_file_path: str = '/home/pi/pi4_drive/Error_and_Logs/error_log.txt'
@@ -333,6 +331,7 @@ class AppConfig:
     # Timing settings
     light_cooldown: int = 30  # seconds between light activations
     motion_message_cooldown: int = 120  # seconds between motion notifications
+    relay_heartbeat_interval: int = 120  # seconds between ESP01 relay polls
 
     def validate(self) -> bool:
         """Validate all configurations."""

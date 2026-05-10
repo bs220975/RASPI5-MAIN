@@ -66,14 +66,12 @@ class SensorState:
     Attributes:
         pir_active: PIR sensor detecting motion
         mms_active: Microwave sensor detecting motion
-        reed_switch_closed: Door is closed (True) or open (False)
         radar_motion: Radar detecting motion
         radar_distance: Last measured radar distance in cm
         timestamp: Time when state was captured
     """
     pir_active: bool = False
     mms_active: bool = False
-    reed_switch_closed: bool = True
     radar_motion: bool = False
     radar_distance: int = 0
     timestamp: float = field(default_factory=time.time)
@@ -332,13 +330,9 @@ class GPIOSensorManager(BaseSensor):
         self._config = config
         self._mms_sensor = None
         self._pir_sensor = None
-        self._reed_switch = None
-        self._prev_door_state: Optional[bool] = None
         self._initialized = False
 
         # Callbacks
-        self._on_door_open: Optional[Callable[[], None]] = None
-        self._on_door_close: Optional[Callable[[], None]] = None
         self._on_motion: Optional[Callable[[str], None]] = None
 
     def initialize(self) -> bool:
@@ -355,7 +349,8 @@ class GPIOSensorManager(BaseSensor):
             try:
                 self._mms_sensor = DigitalInputDevice(
                     self._config.mms_sensor_pin,
-                    pull_up=False
+                    pull_up=False,
+                    bounce_time=0.1
                 )
             except Exception as e:
                 logger.warning(f"MMS sensor init failed: {e}")
@@ -363,19 +358,11 @@ class GPIOSensorManager(BaseSensor):
             try:
                 self._pir_sensor = DigitalInputDevice(
                     self._config.pir_sensor_pin,
-                    pull_up=False
+                    pull_up=False,
+                    bounce_time=0.1
                 )
             except Exception as e:
                 logger.warning(f"PIR sensor init failed: {e}")
-
-            try:
-                self._reed_switch = DigitalInputDevice(
-                    self._config.reed_switch_pin,
-                    pull_up=True
-                )
-                self._prev_door_state = self._reed_switch.value
-            except Exception as e:
-                logger.warning(f"Reed switch init failed: {e}")
 
             # Setup LED
             try:
@@ -407,20 +394,14 @@ class GPIOSensorManager(BaseSensor):
 
     def set_callbacks(
         self,
-        on_door_open: Optional[Callable[[], None]] = None,
-        on_door_close: Optional[Callable[[], None]] = None,
         on_motion: Optional[Callable[[str], None]] = None
     ) -> None:
         """
         Set callbacks for sensor events.
 
         Args:
-            on_door_open: Called when door opens
-            on_door_close: Called when door closes
             on_motion: Called on motion with sensor name
         """
-        self._on_door_open = on_door_open
-        self._on_door_close = on_door_close
         self._on_motion = on_motion
 
     def read_mms(self) -> bool:
@@ -435,40 +416,6 @@ class GPIOSensorManager(BaseSensor):
             return bool(self._pir_sensor.value)
         return False
 
-    def read_reed_switch(self) -> bool:
-        """Read reed switch state (True = closed/door closed)."""
-        if self._reed_switch:
-            return bool(self._reed_switch.value)
-        return True
-
-    def check_door_state(self) -> Optional[bool]:
-        """
-        Check door state and trigger callbacks on change.
-
-        Returns:
-            True if door opened, False if closed, None if unchanged
-        """
-        if not self._reed_switch:
-            return None
-
-        current_state = self._reed_switch.value
-
-        if current_state == self._prev_door_state:
-            return None
-
-        self._prev_door_state = current_state
-
-        if current_state == 0:  # Door opened
-            logger.info("Door OPENED")
-            if self._on_door_open:
-                self._on_door_open()
-            return True
-        else:  # Door closed
-            logger.info("Door CLOSED")
-            if self._on_door_close:
-                self._on_door_close()
-            return False
-
     def set_led(self, state: bool) -> None:
         """Set status LED state."""
         if GPIO_AVAILABLE and self._initialized:
@@ -482,7 +429,6 @@ class GPIOSensorManager(BaseSensor):
         return SensorState(
             pir_active=self.read_pir(),
             mms_active=self.read_mms(),
-            reed_switch_closed=self.read_reed_switch(),
         )
 
 
@@ -497,7 +443,6 @@ class MockGPIOSensorManager(GPIOSensorManager):
         super().__init__(config)
         self._mock_pir = False
         self._mock_mms = False
-        self._mock_reed = True
         self._mock_led = False
 
     def initialize(self) -> bool:
@@ -515,9 +460,6 @@ class MockGPIOSensorManager(GPIOSensorManager):
     def read_pir(self) -> bool:
         return self._mock_pir
 
-    def read_reed_switch(self) -> bool:
-        return self._mock_reed
-
     def set_led(self, state: bool) -> None:
         self._mock_led = state
 
@@ -525,15 +467,12 @@ class MockGPIOSensorManager(GPIOSensorManager):
         self,
         pir: Optional[bool] = None,
         mms: Optional[bool] = None,
-        reed: Optional[bool] = None
     ) -> None:
         """Set mock sensor states for testing."""
         if pir is not None:
             self._mock_pir = pir
         if mms is not None:
             self._mock_mms = mms
-        if reed is not None:
-            self._mock_reed = reed
 
 
 class SensorManager:
@@ -610,14 +549,6 @@ class SensorManager:
         self.gpio.cleanup()
         self.radar.cleanup()
 
-    def set_door_callbacks(
-        self,
-        on_open: Optional[Callable[[], None]] = None,
-        on_close: Optional[Callable[[], None]] = None
-    ) -> None:
-        """Set callbacks for door state changes."""
-        self.gpio.set_callbacks(on_door_open=on_open, on_door_close=on_close)
-
     def get_full_state(self) -> SensorState:
         """Get state of all sensors including radar."""
         state = self.gpio.get_state()
@@ -633,10 +564,6 @@ class SensorManager:
             self.gpio.read_pir() or
             self.gpio.read_mms()
         )
-
-    def check_door(self) -> Optional[bool]:
-        """Check door state and trigger callbacks."""
-        return self.gpio.check_door_state()
 
     def set_led(self, state: bool) -> None:
         """Set status LED."""
@@ -655,6 +582,5 @@ class SensorManager:
             'current_state': {
                 'pir': self.gpio.read_pir(),
                 'mms': self.gpio.read_mms(),
-                'door_closed': self.gpio.read_reed_switch(),
             }
         }

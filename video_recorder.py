@@ -142,8 +142,8 @@ class VideoRecorder:
         Returns:
             True if recording started successfully.
         """
-        if self._state == RecordingState.RECORDING:
-            self._logger.warning("Already recording")
+        if self._state in (RecordingState.RECORDING, RecordingState.PROCESSING):
+            self._logger.warning(f"Cannot start recording: currently {self._state.value}")
             return False
 
         # Wait for previous recording thread to fully finish before starting new one

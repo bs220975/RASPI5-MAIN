@@ -39,7 +39,7 @@ from esp_devices import ESPDeviceManager
 from influxdb_logger import InfluxDBLogger
 from bot_commands import BotCommandHandler
 
-__version__ = '26.01.27'
+__version__ = '26.04.30'
 __author__ = 'Raspberry Pi Home Automation'
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,10 @@ class RaspberryPiController:
         self._recording_start_time: float = 0
         self._prev_motion_state: bool = False
         self._motion_stable_start: float = 0
+
+        # ESP01 relay heartbeat
+        self._last_relay_poll: float = 0
+        self._last_relay_state: object = object()  # sentinel: "never polled"
 
         # Setup logging
         self._setup_logging()
@@ -165,10 +169,6 @@ class RaspberryPiController:
             self.sensors = SensorManager(self.config.gpio, self.config.radar)
             if self.sensors.initialize():
                 logger.info("Sensor manager: OK")
-                self.sensors.set_door_callbacks(
-                    on_open=self._on_door_open,
-                    on_close=self._on_door_close
-                )
             else:
                 logger.warning("Sensor initialization partial - some sensors unavailable")
 
@@ -191,7 +191,8 @@ class RaspberryPiController:
                 telegram_handler=self.telegram,
                 esp_manager=self.esp,
                 video_recorder=self.recorder,
-                influx_logger=self.influx
+                influx_logger=self.influx,
+                sensor_manager=self.sensors
             )
 
             # Start bot message loop
@@ -280,6 +281,17 @@ class RaspberryPiController:
                 # Pet the software watchdog
                 self._watchdog_last_ping = time.time()
 
+                # ESP01 relay heartbeat poll (runs regardless of motion state)
+                if self.esp and (
+                    time.time() - self._last_relay_poll
+                    >= self.config.relay_heartbeat_interval
+                ):
+                    self._last_relay_poll = time.time()
+                    threading.Thread(
+                        target=self._poll_relay_heartbeat,
+                        daemon=True
+                    ).start()
+
                 # Check if motion detection is enabled
                 if self.bot_handler and not self.bot_handler.is_motion_enabled():
                     continue
@@ -293,10 +305,6 @@ class RaspberryPiController:
 
                     # Process motion event
                     self._process_motion(motion_detected)
-
-                # Check door sensor
-                if self.sensors:
-                    self.sensors.check_door()
 
             except Exception as e:
                 logger.error(f"Loop iteration error: {e}")
@@ -360,13 +368,26 @@ class RaspberryPiController:
 
         def activate():
             try:
-                success, response = self.esp.send_to_lobby("motion")
+                success, response = self.esp.send_to_lobby("lighton")
                 if success:
                     logger.debug(f"Light activated: {response}")
             except Exception as e:
                 logger.error(f"Light activation error: {e}")
 
         threading.Thread(target=activate, daemon=True).start()
+
+    def _poll_relay_heartbeat(self) -> None:
+        """Poll ESP01 relay state and report to Telegram only on state change."""
+        try:
+            state = self.esp.get_relay_state()
+            msg = f"ESP01 Relay: {state}" if state is not None else "ESP01 Relay: OFFLINE"
+            logger.info(f"Relay heartbeat — {msg}")
+            if state != self._last_relay_state:
+                self._last_relay_state = state
+                if self.telegram:
+                    self.telegram.send_text(msg)
+        except Exception as e:
+            logger.error(f"Relay heartbeat error: {e}")
 
     def _handle_video_recording(self, current_time: float) -> None:
         """Handle video recording logic."""
@@ -422,16 +443,6 @@ class RaspberryPiController:
         # Wait for 2 seconds of stable motion
         if current_time - self._motion_stable_start >= 2:
             self.influx.log_motion_state(motion_detected)
-
-    def _on_door_open(self) -> None:
-        """Callback when door opens."""
-        if self.telegram:
-            self.telegram.send_text("Door is OPEN now")
-
-    def _on_door_close(self) -> None:
-        """Callback when door closes."""
-        if self.telegram:
-            self.telegram.send_text("Door is CLOSED now")
 
     def _on_recording_complete(self, result: RecordingResult) -> None:
         """Callback when video recording completes."""

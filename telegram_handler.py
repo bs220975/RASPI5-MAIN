@@ -254,6 +254,7 @@ class TelegramHandler:
             return False
         except FileNotFoundError:
             logger.error(f"File not found: {message.content}")
+            message.retry_count = self._config.retry_attempts  # permanent failure, skip retries
             return False
         except Exception as e:
             logger.error(f"Error sending {message.message_type.name}: {e}")

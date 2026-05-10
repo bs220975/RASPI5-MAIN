@@ -222,6 +222,38 @@ class ESPDeviceManager:
         """Turn off porch light"""
         return self.send_to_porch("lightoff")
 
+    def get_relay_state(self) -> Optional[str]:
+        """
+        Poll ESP01 relay at /status.
+
+        The relay returns plain text 'ON' or 'OFF' (not JSON).
+
+        Returns:
+            'ON', 'OFF', or None if unreachable.
+        """
+        relay_ip = self.config.devices.get('ESP01_Relay')
+        if not relay_ip:
+            self._logger.warning("ESP01_Relay not found in config")
+            return None
+        try:
+            response = requests.get(
+                f"http://{relay_ip}/status",
+                timeout=self._timeout
+            )
+            if response.status_code == 200:
+                return response.text.strip().upper()
+        except requests.exceptions.RequestException as e:
+            self._logger.warning(f"ESP01 Relay poll failed: {e}")
+        return None
+
+    def relay_on(self) -> Tuple[bool, str]:
+        """Turn ESP01 relay ON"""
+        return self.send_command('ESP01_Relay', 'lighton')
+
+    def relay_off(self) -> Tuple[bool, str]:
+        """Turn ESP01 relay OFF"""
+        return self.send_command('ESP01_Relay', 'lightoff')
+
     def generate_status_table(self) -> str:
         """Generate a text table of all device statuses"""
         statuses = self.get_all_device_status()

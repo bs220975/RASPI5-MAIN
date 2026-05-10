@@ -42,13 +42,15 @@ class BotCommandHandler:
         telegram_handler: Any,  # TelegramHandler
         esp_manager: Any,  # ESPDeviceManager
         video_recorder: Any,  # VideoRecorder
-        influx_logger: Optional[Any] = None  # InfluxDBLogger
+        influx_logger: Optional[Any] = None,  # InfluxDBLogger
+        sensor_manager: Optional[Any] = None  # SensorManager
     ):
         self.config = config
         self.telegram = telegram_handler
         self.esp = esp_manager
         self.recorder = video_recorder
         self.influx = influx_logger
+        self.sensors = sensor_manager
         self.state = BotState()
         self._logger = logging.getLogger(__name__)
 
@@ -101,6 +103,11 @@ class BotCommandHandler:
             '/oled': self._cmd_oled,
             '/esp_status_check': self._cmd_esp_status,
 
+            # ESP01 relay
+            '/relay_status': self._cmd_relay_status,
+            '/relay_on': self._cmd_relay_on,
+            '/relay_off': self._cmd_relay_off,
+
             # Reed switch
             '/reed_switch_On': self._cmd_reed_on,
             '/reed_switch_Off': self._cmd_reed_off,
@@ -114,6 +121,11 @@ class BotCommandHandler:
             '/energy_table': self._cmd_energy_table,
             '/system_check': self._cmd_system_check,
             '/sensors_data_plot': self._cmd_sensors_plot,
+
+            # Log files
+            '/get_error_log': self._cmd_get_error_log,
+            '/get_service_log': self._cmd_get_service_log,
+            '/clear_logs': self._cmd_clear_logs,
         }
 
     def handle_message(self, msg: Dict) -> None:
@@ -182,7 +194,10 @@ class BotCommandHandler:
             "/reset_esp8266_porch — Reset porch ESP\n"
             "/oled — ESP32 OLED display\n"
             "/reed_switch_On — Door sensor ON\n"
-            "/reed_switch_Off — Door sensor OFF\n\n"
+            "/reed_switch_Off — Door sensor OFF\n"
+            "/relay_status — Check ESP01 relay state\n"
+            "/relay_on — Turn relay ON\n"
+            "/relay_off — Turn relay OFF\n\n"
 
             "<b>☁️ Cloud Sync</b>\n"
             "/sync_drive_to_pi — Drive → Pi\n"
@@ -202,6 +217,11 @@ class BotCommandHandler:
             "/sensors_data_plot — Sensor data plot\n"
             "/weather — Weather report\n"
             "/energy_table — Energy data\n\n"
+
+            "<b>📋 Logs</b>\n"
+            "/get_error_log — Download error log file\n"
+            "/get_service_log — Download service output log\n"
+            "/clear_logs — Clear all log files\n\n"
 
             "<b>⚙️ System</b>\n"
             "/script_runtime — Script uptime\n"
@@ -235,6 +255,9 @@ class BotCommandHandler:
             {'command': 'oled',                   'description': 'ESP32 OLED display'},
             {'command': 'reed_switch_on',         'description': 'Door sensor ON'},
             {'command': 'reed_switch_off',        'description': 'Door sensor OFF'},
+            {'command': 'relay_status',           'description': 'Check ESP01 relay state'},
+            {'command': 'relay_on',               'description': 'Turn relay ON'},
+            {'command': 'relay_off',              'description': 'Turn relay OFF'},
             {'command': 'diskuse_status',         'description': 'Disk usage'},
             {'command': 'raspi_temprature',       'description': 'CPU temperature'},
             {'command': 'current_time',           'description': 'Current time'},
@@ -246,6 +269,9 @@ class BotCommandHandler:
             {'command': 'enable_drive_upload',    'description': 'Enable auto upload'},
             {'command': 'disable_drive_upload',   'description': 'Disable auto upload'},
             {'command': 'delete_disk_storage',    'description': 'Clear video storage'},
+            {'command': 'get_error_log',          'description': 'Download error log file'},
+            {'command': 'get_service_log',        'description': 'Download service output log'},
+            {'command': 'clear_logs',             'description': 'Clear all log files'},
             {'command': 'script_restart',         'description': 'Restart script'},
             {'command': 'reboot_raspi',           'description': 'Reboot Raspberry Pi'},
         ]
@@ -515,15 +541,40 @@ class BotCommandHandler:
         except Exception as e:
             self.telegram.send_text(f"Error: {e}")
 
+    def _cmd_relay_status(self) -> None:
+        """Check ESP01 relay state"""
+        state = self.esp.get_relay_state()
+        self.telegram.send_text(
+            f"ESP01 Relay: {state}" if state is not None else "ESP01 Relay: OFFLINE"
+        )
+
+    def _cmd_relay_on(self) -> None:
+        """Turn ESP01 relay ON"""
+        success, response = self.esp.relay_on()
+        self.telegram.send_text("Relay: ON" if success else f"Error: {response}")
+
+    def _cmd_relay_off(self) -> None:
+        """Turn ESP01 relay OFF"""
+        success, response = self.esp.relay_off()
+        self.telegram.send_text("Relay: OFF" if success else f"Error: {response}")
+
     def _cmd_reed_on(self) -> None:
-        """Enable door reed switch"""
-        success, response = self.esp.send_to_gsm("reedon")
-        self.telegram.send_text("Door sensor: ENABLED" if success else f"Error: {response}")
+        """Check reed switch state on GPIO pin 26"""
+        if not self.sensors:
+            self.telegram.send_text("Sensor manager not available")
+            return
+        state = self.sensors.gpio.read_reed_switch()
+        door_status = "CLOSED" if state else "OPEN"
+        self.telegram.send_text(f"Reed switch (GPIO 26): {door_status}")
 
     def _cmd_reed_off(self) -> None:
-        """Disable door reed switch"""
-        success, response = self.esp.send_to_gsm("reedoff")
-        self.telegram.send_text("Door sensor: DISABLED" if success else f"Error: {response}")
+        """Check reed switch state on GPIO pin 26"""
+        if not self.sensors:
+            self.telegram.send_text("Sensor manager not available")
+            return
+        state = self.sensors.gpio.read_reed_switch()
+        door_status = "CLOSED" if state else "OPEN"
+        self.telegram.send_text(f"Reed switch (GPIO 26): {door_status}")
 
     def _cmd_reboot(self) -> None:
         """Reboot Raspberry Pi"""
@@ -578,6 +629,66 @@ class BotCommandHandler:
         except Exception as e:
             self._logger.error(f"Record video error: {e}")
             self.telegram.send_text(f"Error: {e}")
+
+    # === Log File Commands ===
+
+    LOG_FILES = {
+        'error':   '/home/pi/pi4_drive/Error_and_Logs/error_log.txt',
+        'service': '/home/pi/pi4_drive/Error_and_Logs/Output_mybot_service.log',
+        'stderr':  '/home/pi/pi4_drive/Error_and_Logs/Error_mybot_service.log',
+    }
+    MAX_TAIL_LINES = 100           # lines to send as text if file is too large
+    MAX_SEND_BYTES = 45 * 1024 * 1024  # 45 MB — Telegram document limit is 50 MB
+
+    def _send_log_file(self, log_path: str, label: str) -> None:
+        """Send a log file to Telegram. Sends as document if small, last N lines if large."""
+        if not os.path.exists(log_path):
+            self.telegram.send_text(f"{label}: file not found")
+            return
+
+        size = os.path.getsize(log_path)
+
+        if size == 0:
+            self.telegram.send_text(f"{label}: log is empty (no errors recorded)")
+            return
+
+        size_kb = size / 1024
+        if size > self.MAX_SEND_BYTES:
+            # File too large — send last N lines as text instead
+            try:
+                result = subprocess.run(
+                    ['tail', f'-{self.MAX_TAIL_LINES}', log_path],
+                    capture_output=True, text=True, timeout=10
+                )
+                self.telegram.send_text(
+                    f"{label} (last {self.MAX_TAIL_LINES} lines — file too large {size_kb:.0f} KB):\n\n"
+                    f"<pre>{result.stdout[-3500:]}</pre>",
+                    parse_mode='HTML'
+                )
+            except Exception as e:
+                self.telegram.send_text(f"Error reading {label}: {e}")
+        else:
+            self.telegram.send_document(log_path, caption=f"{label} ({size_kb:.1f} KB)")
+
+    def _cmd_get_error_log(self) -> None:
+        """Send the application error log file"""
+        self._send_log_file(self.LOG_FILES['error'], 'Error Log')
+
+    def _cmd_get_service_log(self) -> None:
+        """Send the service output log file"""
+        self._send_log_file(self.LOG_FILES['service'], 'Service Output Log')
+
+    def _cmd_clear_logs(self) -> None:
+        """Clear all log files remotely"""
+        try:
+            cleared = []
+            for label, path in self.LOG_FILES.items():
+                if os.path.exists(path):
+                    open(path, 'w').close()
+                    cleared.append(os.path.basename(path))
+            self.telegram.send_text(f"Logs cleared:\n" + "\n".join(f"- {f}" for f in cleared))
+        except Exception as e:
+            self.telegram.send_text(f"Error clearing logs: {e}")
 
     # === State Access Methods ===
 
