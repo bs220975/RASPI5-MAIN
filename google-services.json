@@ -1,0 +1,49 @@
+{
+  "project_info": {
+    "project_number": "681570636274",
+    "firebase_url": "https://home-security-app-555cf-default-rtdb.asia-southeast1.firebasedatabase.app",
+    "project_id": "home-security-app-555cf",
+    "storage_bucket": "home-security-app-555cf.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:681570636274:android:8918067b14d094b6419b6b",
+        "android_client_info": {
+          "package_name": "com.example.myelectronics"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB_JsUorzpDT2R59ZUFLj1lK77Ypu2QfzY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:681570636274:android:63b8813597438a76419b6b",
+        "android_client_info": {
+          "package_name": "com.homesecurity.alertapp"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB_JsUorzpDT2R59ZUFLj1lK77Ypu2QfzY"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
