@@ -33,6 +33,7 @@ __all__ = [
     'GPIOConfig',
     'VideoConfig',
     'RadarConfig',
+    'FirebaseConfig',
     'AppConfig',
     'config',
     'load_config',
@@ -305,6 +306,20 @@ class RadarConfig:
         return True
 
 
+@dataclass
+class FirebaseConfig:
+    """
+    Firebase Realtime Database configuration.
+
+    No auth required — database rules allow public write on
+    devices/, lights/, and commands/ nodes.
+    """
+    database_url: str = 'https://home-security-app-555cf-default-rtdb.asia-southeast1.firebasedatabase.app'
+    project_id: str = 'home-security-app-555cf'
+    request_timeout: int = 5        # seconds per HTTP call
+    heartbeat_interval: int = 60    # seconds between Pi status pushes
+
+
 @dataclass(frozen=False)
 class AppConfig:
     """
@@ -318,6 +333,7 @@ class AppConfig:
     gpio: GPIOConfig = field(default_factory=GPIOConfig)
     video: VideoConfig = field(default_factory=VideoConfig)
     radar: RadarConfig = field(default_factory=RadarConfig)
+    firebase: FirebaseConfig = field(default_factory=FirebaseConfig)
 
     # Application metadata
     script_version: str = 'V26.04.30'

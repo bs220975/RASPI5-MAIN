@@ -38,6 +38,7 @@ from video_recorder import VideoRecorder, RecordingResult
 from esp_devices import ESPDeviceManager
 from influxdb_logger import InfluxDBLogger
 from bot_commands import BotCommandHandler
+from firebase_logger import FirebaseLogger
 
 __version__ = '26.04.30'
 __author__ = 'Raspberry Pi Home Automation'
@@ -84,6 +85,7 @@ class RaspberryPiController:
         self.esp: Optional[ESPDeviceManager] = None
         self.influx: Optional[InfluxDBLogger] = None
         self.bot_handler: Optional[BotCommandHandler] = None
+        self.firebase: Optional[FirebaseLogger] = None
 
         # Motion detection state
         self._last_motion_time: float = 0
@@ -96,6 +98,9 @@ class RaspberryPiController:
         # ESP01 relay heartbeat
         self._last_relay_poll: float = 0
         self._last_relay_state: object = object()  # sentinel: "never polled"
+
+        # Firebase heartbeat
+        self._last_firebase_push: float = 0
 
         # Setup logging
         self._setup_logging()
@@ -195,6 +200,14 @@ class RaspberryPiController:
                 sensor_manager=self.sensors
             )
 
+            # Initialize Firebase logger
+            logger.info("Initializing Firebase logger...")
+            self.firebase = FirebaseLogger(self.config.firebase)
+            if self.firebase.connect():
+                logger.info("Firebase logger: OK")
+            else:
+                logger.warning("Firebase connection failed - live status disabled")
+
             # Start bot message loop
             self.telegram.start_message_loop(self.bot_handler.handle_message)
             logger.info("Bot message loop: Started")
@@ -292,6 +305,17 @@ class RaspberryPiController:
                         daemon=True
                     ).start()
 
+                # Firebase heartbeat push
+                if self.firebase and (
+                    time.time() - self._last_firebase_push
+                    >= self.config.firebase.heartbeat_interval
+                ):
+                    self._last_firebase_push = time.time()
+                    threading.Thread(
+                        target=self._push_firebase_status,
+                        daemon=True
+                    ).start()
+
                 # Check if motion detection is enabled
                 if self.bot_handler and not self.bot_handler.is_motion_enabled():
                     continue
@@ -341,12 +365,24 @@ class RaspberryPiController:
                     self.telegram.send_text("Motion detected by LD2420 radar sensor")
                     self._last_motion_message_time = current_time
 
+            # Push motion start to Firebase
+            if motion_state_changed and self.firebase:
+                threading.Thread(
+                    target=self._push_firebase_status,
+                    daemon=True
+                ).start()
+
         else:
             # Motion stopped
             if motion_state_changed:
                 if self.influx:
                     self.influx.log_motion_state(False)
                 self._motion_stable_start = 0
+                if self.firebase:
+                    threading.Thread(
+                        target=self._push_firebase_status,
+                        daemon=True
+                    ).start()
 
             # Check if recording should stop
             self._check_stop_recording(current_time)
@@ -377,17 +413,40 @@ class RaspberryPiController:
         threading.Thread(target=activate, daemon=True).start()
 
     def _poll_relay_heartbeat(self) -> None:
-        """Poll ESP01 relay state and report to Telegram only on state change."""
+        """Poll ESP01 relay at 192.168.1.85 and push status to Firebase."""
         try:
             state = self.esp.get_relay_state()
-            msg = f"ESP01 Relay: {state}" if state is not None else "ESP01 Relay: OFFLINE"
+            reachable = state is not None
+            relay_on = (state == 'ON') if reachable else False
+            msg = f"ESP01 Relay: {state}" if reachable else "ESP01 Relay: OFFLINE"
             logger.info(f"Relay heartbeat — {msg}")
+
+            # Push to Firebase whenever we get a response (or failure)
+            if self.firebase:
+                self.firebase.push_lobby_relay_status(
+                    reachable=reachable,
+                    relay_on=relay_on,
+                )
+
             if state != self._last_relay_state:
                 self._last_relay_state = state
                 if self.telegram:
                     self.telegram.send_text(msg)
         except Exception as e:
             logger.error(f"Relay heartbeat error: {e}")
+
+    def _push_firebase_status(self) -> None:
+        """Push current Pi status snapshot to Firebase."""
+        if not self.firebase:
+            return
+        try:
+            recording = bool(self.recorder and self.recorder.is_recording)
+            self.firebase.push_pi_status(
+                motion=self._prev_motion_state,
+                recording=recording,
+            )
+        except Exception as e:
+            logger.warning(f"Firebase status push error: {e}")
 
     def _handle_video_recording(self, current_time: float) -> None:
         """Handle video recording logic."""
@@ -485,6 +544,9 @@ class RaspberryPiController:
             camera_status = "OK" if (self.recorder and self.recorder._camera) else "Not available"
             self.telegram.send_text(f"Camera: {camera_status}")
 
+        if self.firebase:
+            self._push_firebase_status()
+
     def _signal_handler(self, signum: int, frame) -> None:
         """Handle shutdown signals."""
         logger.info(f"Received signal {signum}, initiating shutdown...")
@@ -506,6 +568,10 @@ class RaspberryPiController:
         if self.influx:
             logger.info("Closing InfluxDB connection...")
             self.influx.close()
+
+        if self.firebase:
+            logger.info("Marking Firebase offline...")
+            self.firebase.mark_offline()
 
         if self.telegram:
             logger.info("Stopping Telegram handler...")
