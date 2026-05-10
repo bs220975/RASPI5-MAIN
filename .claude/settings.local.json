@@ -17,7 +17,9 @@
       "Bash(python3:*)",
       "Bash(journalctl:*)",
       "Bash(python:*)",
-      "Bash(sudo systemctl:*)"
+      "Bash(sudo systemctl:*)",
+      "WebFetch(domain:api.github.com)",
+      "Bash(source:*)"
     ]
   }
 }

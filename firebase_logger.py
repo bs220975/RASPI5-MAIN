@@ -137,6 +137,36 @@ class FirebaseLogger:
         }
         return self._patch('devices/ESP01-LL-RLY', data)
 
+    def get_light_command(self, light_id: str) -> Optional[bool]:
+        """
+        Read lights/{light_id}/state from RTDB (app-commanded value).
+
+        Returns:
+            True = ON, False = OFF, None = read error / node absent
+        """
+        try:
+            resp = requests.get(
+                self._url(f'lights/{light_id}/state'),
+                timeout=self._timeout,
+            )
+            if resp.status_code == 200:
+                val = resp.json()
+                if isinstance(val, bool):
+                    return val
+        except Exception as e:
+            logger.debug(f'Firebase get_light_command({light_id}) error: {e}')
+        return None
+
+    def set_light_confirmed(self, light_id: str, confirmed: bool) -> bool:
+        """
+        Write lights/{light_id}/confirmed — tells the app the relay actually changed.
+
+        Args:
+            light_id:  Firebase light key e.g. 'living_room'
+            confirmed: True = relay is ON, False = relay is OFF
+        """
+        return self._patch(f'lights/{light_id}', {'confirmed': confirmed})
+
     def mark_offline(self) -> bool:
         """Mark Pi as offline in Firebase on clean shutdown."""
         return self._patch('devices/RASPI-4', {

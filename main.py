@@ -102,6 +102,10 @@ class RaspberryPiController:
         # Firebase heartbeat
         self._last_firebase_push: float = 0
 
+        # Firebase light command polling (living_room → ESP01 at 192.168.1.85)
+        self._last_light_cmd_poll: float = 0
+        self._last_living_room_cmd: Optional[bool] = None  # tracks last seen state
+
         # Setup logging
         self._setup_logging()
 
@@ -316,6 +320,16 @@ class RaspberryPiController:
                         daemon=True
                     ).start()
 
+                # Firebase light command poll — living_room switch → ESP01 lobby relay
+                if self.firebase and (
+                    time.time() - self._last_light_cmd_poll >= 1.0
+                ):
+                    self._last_light_cmd_poll = time.time()
+                    threading.Thread(
+                        target=self._poll_light_command,
+                        daemon=True
+                    ).start()
+
                 # Check if motion detection is enabled
                 if self.bot_handler and not self.bot_handler.is_motion_enabled():
                     continue
@@ -434,6 +448,36 @@ class RaspberryPiController:
                     self.telegram.send_text(msg)
         except Exception as e:
             logger.error(f"Relay heartbeat error: {e}")
+
+    def _poll_light_command(self) -> None:
+        """
+        Poll lights/living_room/state from Firebase and act on changes.
+
+        When the app toggles the Living Room switch:
+          state=True  → GET http://192.168.1.85/lighton
+          state=False → GET http://192.168.1.85/lightoff
+        Then writes lights/living_room/confirmed with the actual relay result.
+        """
+        if not self.firebase or not self.esp:
+            return
+        try:
+            cmd = self.firebase.get_light_command('living_room')
+            if cmd is None or cmd == self._last_living_room_cmd:
+                return  # no change or read error
+
+            self._last_living_room_cmd = cmd
+            logger.info(f'Living room light command: {"ON" if cmd else "OFF"}')
+
+            if cmd:
+                success, _ = self.esp.lobby_light_on()
+            else:
+                success, _ = self.esp.lobby_light_off()
+
+            self.firebase.set_light_confirmed('living_room', success and cmd)
+            logger.info(f'Living room confirmed: {"ON" if (success and cmd) else "OFF"}')
+
+        except Exception as e:
+            logger.warning(f'Light command poll error: {e}')
 
     def _push_firebase_status(self) -> None:
         """Push current Pi status snapshot to Firebase."""
