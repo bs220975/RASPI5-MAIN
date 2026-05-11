@@ -46,7 +46,7 @@ fi
 # STEP 1 — System update & core packages
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 1/11] System update & install packages...${NC}"
+log "${BLUE}[STEP 1/12] System update & install packages...${NC}"
 sudo apt update -q && sudo apt upgrade -y -q
 sudo apt install -y -q \
     git curl wget unzip build-essential \
@@ -67,11 +67,19 @@ if ! command -v gh &>/dev/null; then
 fi
 log "${GREEN}  GitHub CLI ready${NC}"
 
+# Install Node.js 20 LTS (arm64) via NodeSource — needed for Claude CLI
+if ! node --version 2>/dev/null | grep -qE "v(18|20|22)"; then
+    log "  Installing Node.js 20 LTS..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - -q
+    sudo apt install -y -q nodejs
+fi
+log "${GREEN}  Node.js $(node --version) ready${NC}"
+
 # ─────────────────────────────────────────────
 # STEP 2 — GitHub CLI auth
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 2/11] GitHub CLI authentication...${NC}"
+log "${BLUE}[STEP 2/12] GitHub CLI authentication...${NC}"
 if ! gh auth status &>/dev/null; then
     log "${YELLOW}  Login to GitHub (opens browser or use token):${NC}"
     gh auth login
@@ -83,7 +91,7 @@ fi
 # STEP 3 — rclone (Google Drive) setup
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 3/11] Google Drive (rclone) setup...${NC}"
+log "${BLUE}[STEP 3/12] Google Drive (rclone) setup...${NC}"
 mkdir -p /home/pi/.config/rclone
 
 # Try to restore rclone.conf — check USB first, then prompt for manual auth
@@ -118,7 +126,7 @@ fi
 # STEP 4 — Sync pi4_drive from Google Drive
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 4/11] Restoring pi4_drive from Google Drive...${NC}"
+log "${BLUE}[STEP 4/12] Restoring pi4_drive from Google Drive...${NC}"
 mkdir -p "$PI4_DRIVE_DIR"
 
 # Check for pre-reimage backup on Drive first, then fall back to pi4_drive sync
@@ -171,7 +179,7 @@ log "${GREEN}  pi4_drive folder structure created${NC}"
 # STEP 5 — Clone RASPI4-MAIN from GitHub
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 5/11] Cloning RASPI4-MAIN from GitHub...${NC}"
+log "${BLUE}[STEP 5/12] Cloning RASPI4-MAIN from GitHub...${NC}"
 if [ ! -d "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/.git" ]; then
     gh repo clone ${GITHUB_USER}/${REPO_MAIN} "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN"
     log "${GREEN}  Cloned RASPI4-MAIN${NC}"
@@ -192,7 +200,7 @@ fi
 # STEP 6 — Python virtual environment
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 6/11] Creating Python virtual environment (myenv)...${NC}"
+log "${BLUE}[STEP 6/12] Creating Python virtual environment (myenv)...${NC}"
 python3 -m venv "$MYENV_DIR"
 source "$MYENV_DIR/bin/activate"
 pip install --upgrade pip -q
@@ -218,7 +226,7 @@ deactivate
 # STEP 7 — InfluxDB 2 (arm64)
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 7/11] Installing InfluxDB2 (arm64)...${NC}"
+log "${BLUE}[STEP 7/12] Installing InfluxDB2 (arm64)...${NC}"
 INFLUX_VERSION="2.6.1"
 INFLUX_PKG="influxdb2-${INFLUX_VERSION}-linux-arm64.tar.gz"
 INFLUX_URL="https://dl.influxdata.com/influxdb/releases/${INFLUX_PKG}"
@@ -246,7 +254,7 @@ log "${GREEN}  InfluxDB2 installed and running${NC}"
 # STEP 8 — Mosquitto MQTT
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 8/11] Configuring Mosquitto MQTT...${NC}"
+log "${BLUE}[STEP 8/12] Configuring Mosquitto MQTT...${NC}"
 sudo systemctl enable mosquitto
 
 MOSQ_CONF_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/mosquitto"
@@ -269,7 +277,7 @@ log "${GREEN}  Mosquitto running${NC}"
 # STEP 9 — Systemd services
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 9/11] Installing systemd services...${NC}"
+log "${BLUE}[STEP 9/12] Installing systemd services...${NC}"
 SERVICES_SRC="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/services"
 
 # Log folder required by service files
@@ -300,7 +308,7 @@ fi
 # STEP 10 — AWS certs
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 10/11] AWS certs...${NC}"
+log "${BLUE}[STEP 10/12] AWS certs...${NC}"
 CERTS_DEST="$PI4_DRIVE_DIR/pi4_python_projects/RASPI4-MAIN/aws_certs"
 
 # Check GitHub repo (aws_certs is committed there)
@@ -339,7 +347,7 @@ fi
 # STEP 11 — .bashrc & aliases
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 11/11] Restoring .bashrc & aliases...${NC}"
+log "${BLUE}[STEP 11/12] Restoring .bashrc & aliases...${NC}"
 BASHRC_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/bashrc.txt"
 ALIASES_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/.bash_aliases"
 
@@ -358,6 +366,22 @@ grep -q "pi4_drive/shell_scripts" /home/pi/.bashrc || \
     echo 'export PATH="$PATH:/home/pi/pi4_drive/shell_scripts"' >> /home/pi/.bashrc
 
 # ─────────────────────────────────────────────
+# STEP 12 — Claude CLI
+# ─────────────────────────────────────────────
+log ""
+log "${BLUE}[STEP 12/12] Installing Claude CLI (claude-code)...${NC}"
+if command -v claude &>/dev/null; then
+    CURRENT_VER=$(claude --version 2>/dev/null | head -1)
+    log "${YELLOW}  Claude CLI already installed: $CURRENT_VER — upgrading...${NC}"
+    sudo npm install -g @anthropic-ai/claude-code --loglevel=error
+else
+    sudo npm install -g @anthropic-ai/claude-code --loglevel=error
+fi
+CLAUDE_VER=$(claude --version 2>/dev/null | head -1)
+log "${GREEN}  Claude CLI installed: $CLAUDE_VER${NC}"
+log "${YELLOW}  Run 'claude' and login with your Anthropic account on first use${NC}"
+
+# ─────────────────────────────────────────────
 # Done
 # ─────────────────────────────────────────────
 log ""
@@ -365,6 +389,12 @@ log "${GREEN}============================================${NC}"
 log "${GREEN}  POST-INSTALL COMPLETE!${NC}"
 log "${GREEN}  Log: $LOG_FILE${NC}"
 log "${GREEN}============================================${NC}"
+log ""
+log "${CYAN}What was installed:${NC}"
+log "  Node.js 20 LTS         → $(node --version 2>/dev/null)"
+log "  Claude CLI             → $(claude --version 2>/dev/null | head -1)"
+log "  Python myenv           → /home/pi/myenv"
+log "  InfluxDB2              → $(influx version 2>/dev/null | head -1)"
 log ""
 log "${CYAN}Service autostart summary:${NC}"
 log "  mybot.service          → ENABLED (starts on boot)"
@@ -381,4 +411,5 @@ log "  3. Restore crontab:       crontab /media/pi/USB/.../crontab/crontab_pi.tx
 log "  4. Start services now:    sudo systemctl start mybot.service mqttdatainflux.service"
 log "  5. Verify:                bash $PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/scripts/3_verify_setup.sh"
 log "  6. Re-login for aliases:  source ~/.bashrc"
+log "  7. Setup Claude CLI:      claude  (login with Anthropic account)"
 log ""

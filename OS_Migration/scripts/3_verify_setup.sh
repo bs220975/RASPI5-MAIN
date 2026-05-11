@@ -77,6 +77,8 @@ check "gh CLI installed"        "command -v gh"
 check "rclone installed"        "command -v rclone"
 check "influx CLI installed"    "command -v influx"
 check "mosquitto_pub available" "command -v mosquitto_pub"
+check "node.js installed"       "command -v node"
+check "Claude CLI installed"    "command -v claude"
 echo ""
 
 # Connectivity

@@ -76,7 +76,7 @@ wget -qO- https://raw.githubusercontent.com/bs220975/RASPI4-MAIN/main/OS_Migrati
 
 | Step | Action |
 |---|---|
-| 1 | `apt update` + install all packages (git, python3, rclone, mosquitto, cups…) |
+| 1 | `apt update` + install all packages (git, python3, rclone, mosquitto, cups…) + **Node.js 20 LTS** |
 | 2 | GitHub CLI (`gh auth login`) — opens browser to authenticate |
 | 3 | rclone Google Drive setup — restores `rclone.conf` from backup automatically |
 | 4 | **Creates `/home/pi/pi4_drive/`** + syncs from `gdrive:/pi4_backups/` and `gdrive:/pi4_drive/` |
@@ -87,6 +87,7 @@ wget -qO- https://raw.githubusercontent.com/bs220975/RASPI4-MAIN/main/OS_Migrati
 | 9 | Installs + **enables** systemd services (autostart on boot) |
 | 10 | Restores AWS certs (from Drive backup → USB fallback) |
 | 11 | Restores `.bashrc` + `.bash_aliases` (all aliases active on next login) |
+| 12 | **Installs Claude CLI** (`npm install -g @anthropic-ai/claude-code`) |
 
 ### Step 3 — Verify Everything Works
 ```bash
