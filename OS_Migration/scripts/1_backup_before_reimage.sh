@@ -6,7 +6,7 @@
 # Run this BEFORE flashing new 64-bit OS
 # =============================================================
 
-set -e
+# Note: intentionally no 'set -e' — backup should continue even if individual steps fail
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
