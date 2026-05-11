@@ -86,7 +86,7 @@ log ""
 log "${BLUE}[STEP 3/11] Google Drive (rclone) setup...${NC}"
 mkdir -p /home/pi/.config/rclone
 
-# Try to restore rclone.conf from USB backup (contains refresh token — safe offline)
+# Try to restore rclone.conf — check USB first, then prompt for manual auth
 RCLONE_RESTORED=false
 for usb_path in /media/pi /media/${USER} /mnt; do
     for backup_dir in $(ls -d ${usb_path}/*/pre_reimage_* 2>/dev/null | head -3); do
@@ -101,7 +101,7 @@ for usb_path in /media/pi /media/${USER} /mnt; do
 done
 
 if [ "$RCLONE_RESTORED" = false ]; then
-    log "${YELLOW}  USB backup not found. Running rclone config interactively...${NC}"
+    log "${YELLOW}  No USB backup found — running rclone config interactively${NC}"
     log "${YELLOW}  When prompted: n → name=gdrive → type=drive → scope=drive → use auto config=y${NC}"
     rclone config
 fi
@@ -121,20 +121,46 @@ log ""
 log "${BLUE}[STEP 4/11] Restoring pi4_drive from Google Drive...${NC}"
 mkdir -p "$PI4_DRIVE_DIR"
 
-if rclone lsd gdrive:/pi4_drive &>/dev/null; then
+# Check for pre-reimage backup on Drive first, then fall back to pi4_drive sync
+GDRIVE_BACKUP_DIR=""
+if rclone lsd gdrive:/pi4_backups &>/dev/null 2>&1; then
+    # Find the latest pre_reimage_* backup
+    GDRIVE_BACKUP_DIR=$(rclone lsd gdrive:/pi4_backups/ 2>/dev/null | awk '{print $NF}' | grep "pre_reimage_" | sort -r | head -1)
+fi
+
+if [ -n "$GDRIVE_BACKUP_DIR" ]; then
+    log "${GREEN}  Found backup on Google Drive: gdrive:/pi4_backups/${GDRIVE_BACKUP_DIR}${NC}"
     log ""
-    log "${CYAN}  Files on Google Drive (gdrive:/pi4_drive):${NC}"
-    rclone ls gdrive:/pi4_drive/ --max-depth 1 2>/dev/null | head -20 | tee -a "$LOG_FILE"
+    if ask "  Restore from gdrive:/pi4_backups/${GDRIVE_BACKUP_DIR}?"; then
+        log "  Downloading backup... (this may take a few minutes)"
+        rclone copy "gdrive:/pi4_backups/${GDRIVE_BACKUP_DIR}/code/pi4_drive" "$PI4_DRIVE_DIR" --progress 2>&1 | tee -a "$LOG_FILE"
+        # Restore rclone.conf from Drive backup if not already restored from USB
+        if [ "$RCLONE_RESTORED" = false ]; then
+            rclone copy "gdrive:/pi4_backups/${GDRIVE_BACKUP_DIR}/configs/rclone.conf" /home/pi/.config/rclone/ 2>/dev/null && \
+                log "${GREEN}  rclone.conf restored from Drive backup${NC}" || true
+        fi
+        # Restore crontab
+        TMP_CRON=$(mktemp)
+        rclone copy "gdrive:/pi4_backups/${GDRIVE_BACKUP_DIR}/crontab/crontab_pi.txt" /tmp/ 2>/dev/null && \
+            crontab /tmp/crontab_pi.txt 2>/dev/null && \
+            log "${GREEN}  Crontab restored${NC}" || true
+        log "${GREEN}  Backup restored from Google Drive${NC}"
+    else
+        log "${YELLOW}  Skipped backup restore${NC}"
+    fi
+fi
+
+# Also sync live pi4_drive from Drive
+if rclone lsd gdrive:/pi4_drive &>/dev/null 2>&1; then
     log ""
-    if ask "  Sync gdrive:/pi4_drive → /home/pi/pi4_drive now?"; then
-        log "  Syncing... (this may take a few minutes)"
+    log "${CYAN}  Found gdrive:/pi4_drive (your live working folder)${NC}"
+    if ask "  Also sync gdrive:/pi4_drive → /home/pi/pi4_drive?"; then
+        log "  Syncing pi4_drive..."
         rclone sync gdrive:/pi4_drive "$PI4_DRIVE_DIR" --progress 2>&1 | tee -a "$LOG_FILE"
         log "${GREEN}  pi4_drive synced from Google Drive${NC}"
-    else
-        log "${YELLOW}  Skipped Drive sync — run manually: rclone sync gdrive:/pi4_drive /home/pi/pi4_drive${NC}"
     fi
 else
-    log "${YELLOW}  gdrive:/pi4_drive not found — skipping sync${NC}"
+    log "${YELLOW}  gdrive:/pi4_drive not found — skipping${NC}"
 fi
 
 # Always ensure key subfolders exist
@@ -284,20 +310,28 @@ if [ -d "$CERTS_SRC" ] && [ "$(ls -A $CERTS_SRC)" ]; then
     cp -r "$CERTS_SRC/." "$CERTS_DEST/"
     log "${GREEN}  AWS certs copied from GitHub repo${NC}"
 else
-    # Try USB backup
-    for usb_path in /media/pi /media/${USER} /mnt; do
-        for backup_dir in $(ls -d ${usb_path}/*/pre_reimage_* 2>/dev/null); do
-            if [ -d "$backup_dir/aws_certs" ]; then
-                mkdir -p "$CERTS_DEST"
-                cp -r "$backup_dir/aws_certs/." "$CERTS_DEST/"
-                log "${GREEN}  AWS certs restored from USB backup${NC}"
-                break 2
-            fi
+    # Try Drive backup
+    if [ -n "$GDRIVE_BACKUP_DIR" ]; then
+        mkdir -p "$CERTS_DEST"
+        rclone copy "gdrive:/pi4_backups/${GDRIVE_BACKUP_DIR}/aws_certs" "$CERTS_DEST" 2>/dev/null && \
+            log "${GREEN}  AWS certs restored from Google Drive backup${NC}" || true
+    fi
+    # Try USB backup as fallback
+    if [ -z "$(ls -A $CERTS_DEST 2>/dev/null)" ]; then
+        for usb_path in /media/pi /media/${USER} /mnt; do
+            for backup_dir in $(ls -d ${usb_path}/*/pre_reimage_* 2>/dev/null); do
+                if [ -d "$backup_dir/aws_certs" ]; then
+                    mkdir -p "$CERTS_DEST"
+                    cp -r "$backup_dir/aws_certs/." "$CERTS_DEST/"
+                    log "${GREEN}  AWS certs restored from USB backup${NC}"
+                    break 2
+                fi
+            done
         done
-    done
-    if [ ! -d "$CERTS_DEST" ] || [ -z "$(ls -A $CERTS_DEST 2>/dev/null)" ]; then
+    fi
+    if [ -z "$(ls -A $CERTS_DEST 2>/dev/null)" ]; then
         log "${RED}  AWS certs NOT found — mqttdatainflux will fail until restored${NC}"
-        log "${YELLOW}  Copy manually: cp -r /media/pi/USB/pre_reimage_*/aws_certs/ $CERTS_DEST/${NC}"
+        log "${YELLOW}  Copy manually: cp -r /path/to/aws_certs/ $CERTS_DEST/${NC}"
     fi
 fi
 
