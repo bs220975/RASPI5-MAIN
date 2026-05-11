@@ -112,41 +112,6 @@ if ! shopt -oq posix; then
   fi
 fi
 
-
-alias scr='sudo crontab -e'
-alias cr='crontab -e'
-alias stopmybot='sudo systemctl stop mybot.service'
-alias copymybot='sudo cp /home/pi5/gdrive/pi5_codes/Service_files/mybot.service /etc/systemd/system/'
-alias reloadmybot='sudo systemctl daemon-reload'
-alias startmybot='sudo systemctl start mybot.service'
-alias statusmybot='sudo systemctl status mybot.service'
-alias restartmybot='sudo systemctl restart mybot.service'
-alias enablemybot='sudo systemctl enable mybot.service'
-alias codestatus='ps axww | grep "python"'
-alias stopmybot2='sudo systemctl stop mybot2.service'
-alias copymybot2='sudo cp /home/pi5/gdrive/pi5_codes/Service_files/mybot2.service /etc/systemd/system/'
-alias reloadmybot2='sudo systemctl daemon-reload'
-alias startmybot2='sudo systemctl start mybot2.service'
-alias statusmybot2='sudo systemctl status mybot2.service'
-alias restartmybot2='sudo systemctl restart mybot2.service'
-alias enablemybot2='sudo systemctl enable mybot2.service'
-alias servicemybot='sudo journalctl -f -u mybot.service'
-alias servicemybot2='sudo journalctl -f -u mybot2.service'
-alias copymqtt='sudo cp /home/pi5/gdrive/pi5_codes/Service_files/mqttdatainflux.service /etc/systemd/system/'
-alias reloadmqtt='sudo systemctl daemon-reload'
-alias startmqtt='sudo systemctl start mqttdatainflux.service'
-alias statusmqtt='sudo systemctl status mqttdatainflux.service'
-alias restartmqtt='sudo systemctl restart mqttdatainflux.service'
-alias enablemqtt='sudo systemctl enable mqttdatainflux.service'
-alias servicemybot='sudo journalctl -f -u mybot.service'
-alias servicemybot2='sudo journalctl -f -u mybot2.service'
-alias servicemqtt='sudo journalctl -f -u mqttdatainflux.service'
-alias stopmqtt='sudo systemctl stop mqttdatainflux.service'
-alias myenv='source /home/pi5/myenv/bin/activate'
-alias sync='/home/pi5/esp32/pi5_codes/shell_scripts/sync.sh'
-alias copyalias="sudo cp /home/pi5/.bashrc /home/pi5/gdrive/pi5_codes/alias_command_file"
-
-
-
+# Custom aliases are in ~/.bash_aliases (sourced above)
 #script path
-export PATH="$PATH:/home/pi5/gdrive/pi5_codes/shell_scripts"
+export PATH="$PATH:/home/pi/pi4_drive/shell_scripts"

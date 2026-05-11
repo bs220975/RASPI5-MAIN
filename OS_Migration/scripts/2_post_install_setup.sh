@@ -228,11 +228,21 @@ fi
 log ""
 log "${BLUE}[STEP 10/10] Restoring .bashrc & aliases...${NC}"
 BASHRC_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/bashrc.txt"
+ALIASES_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/.bash_aliases"
+
 if [ -f "$BASHRC_BACKUP" ]; then
     cp "$BASHRC_BACKUP" /home/pi/.bashrc
     log "${GREEN}  .bashrc restored${NC}"
 else
     log "${YELLOW}  No bashrc backup found — skipping${NC}"
+fi
+
+if [ -f "$ALIASES_BACKUP" ]; then
+    cp "$ALIASES_BACKUP" /home/pi/.bash_aliases
+    source /home/pi/.bash_aliases 2>/dev/null || true
+    log "${GREEN}  .bash_aliases restored — all aliases active${NC}"
+else
+    log "${YELLOW}  No .bash_aliases backup found — skipping${NC}"
 fi
 
 # ─────────────────────────────────────────────
