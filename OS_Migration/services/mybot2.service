@@ -1,0 +1,16 @@
+[Unit]
+Description=Secondary Service
+
+
+[Service]
+Type=simple
+TimeoutStopSec=infinity
+ExecStart=/usr/bin/python3 /home/pi5/esp32/python_raspi/Running_codes/bot_video_mms_v1.py
+ExecStartPost=/bin/sleep 5
+SuccessExitStatus=0
+#StandardOutput=append:/home/pi5/esp32/python_raspi/Error_and_Logs/Output_mybot2_service.log
+#StandardError=append:/home/pi5/esp32/python_raspi/Error_and_Logs/Error_mybot2_service.log
+User=pi5
+
+[Install]
+WantedBy=multi-user.target
