@@ -4,8 +4,8 @@
 # Run this AFTER flashing Raspberry Pi OS 64-bit (Bookworm)
 # Pi4 | 64-bit arm64 setup
 # =============================================================
-# Usage:
-#   curl -sSL https://raw.githubusercontent.com/bs220975/RASPI4-MAIN/main/OS_Migration/scripts/2_post_install_setup.sh | bash
+# Usage (on fresh Pi, SSH in first):
+#   wget -qO- https://raw.githubusercontent.com/bs220975/RASPI4-MAIN/main/OS_Migration/scripts/2_post_install_setup.sh | bash
 #   OR: bash 2_post_install_setup.sh
 # =============================================================
 
@@ -25,6 +25,7 @@ MYENV_DIR="/home/pi/myenv"
 LOG_FILE="/home/pi/post_install_$(date +%Y-%m-%d_%H-%M).log"
 
 log() { echo -e "$1" | tee -a "$LOG_FILE"; }
+ask() { echo -e "${YELLOW}$1${NC}"; read -p "(y/n): " _ans; [[ "$_ans" == "y" || "$_ans" == "Y" ]]; }
 
 log "${CYAN}============================================${NC}"
 log "${CYAN}   Pi4 Post-Install Setup Script${NC}"
@@ -32,22 +33,20 @@ log "${CYAN}   $(date)${NC}"
 log "${CYAN}============================================${NC}"
 log ""
 
-# Verify 64-bit
+# ── Verify 64-bit ────────────────────────────────────────────
 ARCH=$(uname -m)
 BITS=$(getconf LONG_BIT)
 log "${CYAN}System: $ARCH | ${BITS}-bit userland${NC}"
 if [ "$BITS" != "64" ]; then
-    log "${RED}WARNING: This does not appear to be 64-bit userland (got ${BITS}-bit)${NC}"
-    log "${RED}Make sure you flashed Raspberry Pi OS 64-bit${NC}"
-    read -p "Continue anyway? (y/n): " cont
-    [ "$cont" != "y" ] && exit 1
+    log "${RED}WARNING: Not 64-bit userland (got ${BITS}-bit) — make sure you used Raspberry Pi OS 64-bit${NC}"
+    ask "Continue anyway?" || exit 1
 fi
 
 # ─────────────────────────────────────────────
-# STEP 1 — System update
+# STEP 1 — System update & core packages
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 1/10] System update & upgrade...${NC}"
+log "${BLUE}[STEP 1/11] System update & install packages...${NC}"
 sudo apt update -q && sudo apt upgrade -y -q
 sudo apt install -y -q \
     git curl wget unzip build-essential \
@@ -55,78 +54,152 @@ sudo apt install -y -q \
     libssl-dev libffi-dev \
     i2c-tools libgpiod2 \
     mosquitto mosquitto-clients \
-    rclone gh \
+    rclone \
     libatlas-base-dev libjpeg-dev \
     cups cups-client
-log "${GREEN}  System updated${NC}"
+log "${GREEN}  System updated and packages installed${NC}"
+
+# Install GitHub CLI (gh) separately — not always in apt
+if ! command -v gh &>/dev/null; then
+    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+    sudo apt update -q && sudo apt install -y -q gh
+fi
+log "${GREEN}  GitHub CLI ready${NC}"
 
 # ─────────────────────────────────────────────
 # STEP 2 — GitHub CLI auth
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 2/10] GitHub CLI setup...${NC}"
+log "${BLUE}[STEP 2/11] GitHub CLI authentication...${NC}"
 if ! gh auth status &>/dev/null; then
-    log "${YELLOW}  Please authenticate GitHub CLI:${NC}"
+    log "${YELLOW}  Login to GitHub (opens browser or use token):${NC}"
     gh auth login
 else
     log "${GREEN}  Already authenticated as $(gh api user --jq .login)${NC}"
 fi
 
 # ─────────────────────────────────────────────
-# STEP 3 — Clone pi4_drive from GitHub
+# STEP 3 — rclone (Google Drive) setup
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 3/10] Cloning pi4_drive / RASPI4-MAIN from GitHub...${NC}"
-mkdir -p /home/pi/pi4_drive/Git_projects
+log "${BLUE}[STEP 3/11] Google Drive (rclone) setup...${NC}"
+mkdir -p /home/pi/.config/rclone
 
-# Clone main project
-if [ ! -d "/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/.git" ]; then
-    gh repo clone ${GITHUB_USER}/${REPO_MAIN} /home/pi/pi4_drive/Git_projects/RASPI4-MAIN
-    log "${GREEN}  Cloned RASPI4-MAIN${NC}"
+# Try to restore rclone.conf from USB backup (contains refresh token — safe offline)
+RCLONE_RESTORED=false
+for usb_path in /media/pi /media/${USER} /mnt; do
+    for backup_dir in $(ls -d ${usb_path}/*/pre_reimage_* 2>/dev/null | head -3); do
+        RCLONE_FROM="$backup_dir/configs/rclone.conf"
+        if [ -f "$RCLONE_FROM" ]; then
+            cp "$RCLONE_FROM" /home/pi/.config/rclone/rclone.conf
+            log "${GREEN}  rclone.conf restored from USB: $RCLONE_FROM${NC}"
+            RCLONE_RESTORED=true
+            break 2
+        fi
+    done
+done
+
+if [ "$RCLONE_RESTORED" = false ]; then
+    log "${YELLOW}  USB backup not found. Running rclone config interactively...${NC}"
+    log "${YELLOW}  When prompted: n → name=gdrive → type=drive → scope=drive → use auto config=y${NC}"
+    rclone config
+fi
+
+# Verify rclone can reach Google Drive
+if rclone lsd gdrive:/ &>/dev/null; then
+    log "${GREEN}  Google Drive connected successfully${NC}"
 else
-    log "${GREEN}  RASPI4-MAIN already cloned — pulling latest${NC}"
-    git -C /home/pi/pi4_drive/Git_projects/RASPI4-MAIN pull
+    log "${RED}  Could not connect to Google Drive — check rclone config${NC}"
+    log "${YELLOW}  Run manually: rclone config (add remote named 'gdrive')${NC}"
 fi
 
 # ─────────────────────────────────────────────
-# STEP 4 — Python virtual environment
+# STEP 4 — Sync pi4_drive from Google Drive
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 4/10] Creating Python virtual environment (myenv)...${NC}"
+log "${BLUE}[STEP 4/11] Restoring pi4_drive from Google Drive...${NC}"
+mkdir -p "$PI4_DRIVE_DIR"
+
+if rclone lsd gdrive:/pi4_drive &>/dev/null; then
+    log ""
+    log "${CYAN}  Files on Google Drive (gdrive:/pi4_drive):${NC}"
+    rclone ls gdrive:/pi4_drive/ --max-depth 1 2>/dev/null | head -20 | tee -a "$LOG_FILE"
+    log ""
+    if ask "  Sync gdrive:/pi4_drive → /home/pi/pi4_drive now?"; then
+        log "  Syncing... (this may take a few minutes)"
+        rclone sync gdrive:/pi4_drive "$PI4_DRIVE_DIR" --progress 2>&1 | tee -a "$LOG_FILE"
+        log "${GREEN}  pi4_drive synced from Google Drive${NC}"
+    else
+        log "${YELLOW}  Skipped Drive sync — run manually: rclone sync gdrive:/pi4_drive /home/pi/pi4_drive${NC}"
+    fi
+else
+    log "${YELLOW}  gdrive:/pi4_drive not found — skipping sync${NC}"
+fi
+
+# Always ensure key subfolders exist
+mkdir -p "$PI4_DRIVE_DIR"/{Git_projects,Service_files,shell_scripts,Error_and_Logs,pi4_python_projects,alias_command_file,OS_Migration}
+log "${GREEN}  pi4_drive folder structure created${NC}"
+
+# ─────────────────────────────────────────────
+# STEP 5 — Clone RASPI4-MAIN from GitHub
+# ─────────────────────────────────────────────
+log ""
+log "${BLUE}[STEP 5/11] Cloning RASPI4-MAIN from GitHub...${NC}"
+if [ ! -d "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/.git" ]; then
+    gh repo clone ${GITHUB_USER}/${REPO_MAIN} "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN"
+    log "${GREEN}  Cloned RASPI4-MAIN${NC}"
+else
+    log "${GREEN}  RASPI4-MAIN already exists — pulling latest${NC}"
+    git -C "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN" pull
+fi
+
+# Also link pi4_python_projects/RASPI4-MAIN → Git_projects/RASPI4-MAIN if not present
+PROJ_DIR="$PI4_DRIVE_DIR/pi4_python_projects/RASPI4-MAIN"
+if [ ! -d "$PROJ_DIR" ]; then
+    mkdir -p "$PI4_DRIVE_DIR/pi4_python_projects"
+    ln -s "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN" "$PROJ_DIR"
+    log "${GREEN}  Symlink: pi4_python_projects/RASPI4-MAIN → Git_projects/RASPI4-MAIN${NC}"
+fi
+
+# ─────────────────────────────────────────────
+# STEP 6 — Python virtual environment
+# ─────────────────────────────────────────────
+log ""
+log "${BLUE}[STEP 6/11] Creating Python virtual environment (myenv)...${NC}"
 python3 -m venv "$MYENV_DIR"
 source "$MYENV_DIR/bin/activate"
+pip install --upgrade pip -q
 
-log "  Installing pip packages from requirements..."
-# Try myenv requirements first (from OS_Migration folder)
+# Use pip_myenv.txt from OS_Migration (now available after Drive sync + GitHub clone)
 MYENV_REQ="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/pip_myenv.txt"
 FALLBACK_REQ="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/requirements.txt"
 
 if [ -f "$MYENV_REQ" ]; then
-    pip install --upgrade pip -q
+    log "  Installing from pip_myenv.txt (${MYENV_REQ})..."
     pip install -r "$MYENV_REQ" 2>&1 | tee -a "$LOG_FILE" || true
-    log "${GREEN}  Installed from pip_myenv.txt${NC}"
+    log "${GREEN}  pip packages installed${NC}"
 elif [ -f "$FALLBACK_REQ" ]; then
-    pip install --upgrade pip -q
+    log "  Installing from requirements.txt..."
     pip install -r "$FALLBACK_REQ" 2>&1 | tee -a "$LOG_FILE" || true
-    log "${GREEN}  Installed from requirements.txt${NC}"
+    log "${GREEN}  pip packages installed${NC}"
 else
-    log "${YELLOW}  No requirements file found — install manually later${NC}"
+    log "${YELLOW}  No requirements file found — install manually: pip install -r pip_myenv.txt${NC}"
 fi
-
 deactivate
 
 # ─────────────────────────────────────────────
-# STEP 5 — InfluxDB 2 (arm64)
+# STEP 7 — InfluxDB 2 (arm64)
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 5/10] Installing InfluxDB2 (arm64)...${NC}"
+log "${BLUE}[STEP 7/11] Installing InfluxDB2 (arm64)...${NC}"
 INFLUX_VERSION="2.6.1"
 INFLUX_PKG="influxdb2-${INFLUX_VERSION}-linux-arm64.tar.gz"
 INFLUX_URL="https://dl.influxdata.com/influxdb/releases/${INFLUX_PKG}"
 
-# Check if tarball already exists in pi4_drive
+# Check if tarball already synced from Drive
 if [ -f "/home/pi/${INFLUX_PKG}" ]; then
-    log "  Using existing tarball: /home/pi/${INFLUX_PKG}"
+    log "  Found tarball at /home/pi/${INFLUX_PKG}"
     cp "/home/pi/${INFLUX_PKG}" /tmp/
 else
     log "  Downloading InfluxDB2 ${INFLUX_VERSION}..."
@@ -136,144 +209,119 @@ fi
 tar xzf "/tmp/${INFLUX_PKG}" -C /tmp/
 sudo cp /tmp/influxdb2-${INFLUX_VERSION}/usr/bin/influx /usr/local/bin/
 sudo cp /tmp/influxdb2-${INFLUX_VERSION}/usr/bin/influxd /usr/local/bin/
-
-# Install InfluxDB as service
-if [ -f "/tmp/influxdb2-${INFLUX_VERSION}/lib/systemd/system/influxdb.service" ]; then
+[ -f "/tmp/influxdb2-${INFLUX_VERSION}/lib/systemd/system/influxdb.service" ] && \
     sudo cp /tmp/influxdb2-${INFLUX_VERSION}/lib/systemd/system/influxdb.service /etc/systemd/system/
-fi
 sudo systemctl daemon-reload
 sudo systemctl enable influxdb
 sudo systemctl start influxdb
-log "${GREEN}  InfluxDB2 installed and started${NC}"
+log "${GREEN}  InfluxDB2 installed and running${NC}"
 
 # ─────────────────────────────────────────────
-# STEP 6 — Mosquitto MQTT
+# STEP 8 — Mosquitto MQTT
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 6/10] Configuring Mosquitto MQTT...${NC}"
+log "${BLUE}[STEP 8/11] Configuring Mosquitto MQTT...${NC}"
 sudo systemctl enable mosquitto
 
-# Check if backup config exists
 MOSQ_CONF_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/mosquitto"
 if [ -d "$MOSQ_CONF_BACKUP" ]; then
     sudo cp -r "$MOSQ_CONF_BACKUP/." /etc/mosquitto/
-    log "${GREEN}  Restored Mosquitto config from backup${NC}"
+    log "${GREEN}  Mosquitto config restored from backup${NC}"
 else
-    # Fresh config
     sudo tee /etc/mosquitto/conf.d/default.conf > /dev/null <<'EOL'
 allow_anonymous false
 password_file /etc/mosquitto/passwd
 listener 1883 0.0.0.0
 EOL
     echo -e "mq\nmq\n" | sudo mosquitto_passwd -c /etc/mosquitto/passwd mq > /dev/null 2>&1
-    log "${GREEN}  Fresh Mosquitto config created (user: mq / pass: mq)${NC}"
+    log "${GREEN}  Mosquitto configured (user: mq / pass: mq)${NC}"
 fi
-
 sudo systemctl restart mosquitto
-log "${GREEN}  Mosquitto configured and running${NC}"
+log "${GREEN}  Mosquitto running${NC}"
 
 # ─────────────────────────────────────────────
-# STEP 7 — Systemd services
+# STEP 9 — Systemd services
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 7/10] Installing & configuring systemd services...${NC}"
+log "${BLUE}[STEP 9/11] Installing systemd services...${NC}"
 SERVICES_SRC="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/services"
 
-# Create log folder required by service files
-mkdir -p /home/pi/pi4_drive/Error_and_Logs
-log "${GREEN}  Created Error_and_Logs folder${NC}"
+# Log folder required by service files
+mkdir -p "$PI4_DRIVE_DIR/Error_and_Logs"
+log "${GREEN}  Error_and_Logs folder ready${NC}"
 
 if [ -d "$SERVICES_SRC" ]; then
-    # ── mybot.service ──────────────────────────────────────────────
-    # Runs: RASPI4-MAIN/main.py via myenv
-    # WorkingDir: /home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN
-    # Restart: always | crashes 5x in 5min → reboot
-    # Logs: Error_and_Logs/Output_mybot_service.log + Error_mybot_service.log
+    # mybot.service — enabled (runs RASPI4-MAIN/main.py via myenv, restart=always)
     sudo cp "$SERVICES_SRC/mybot.service" /etc/systemd/system/
     sudo systemctl enable mybot.service
-    log "${GREEN}  [ENABLED] mybot.service${NC}"
+    log "${GREEN}  [ENABLED + AUTOSTART] mybot.service${NC}"
 
-    # ── mqttdatainflux.service ─────────────────────────────────────
-    # Runs: influx_aws_publish/influxdb2_aws_publish.py via myenv
-    # After: network-online.target | 5s startup delay
-    # Restart: on-failure | max 1 restart per 5min
-    # Logs: Error_and_Logs/Error_influxdb_aws_publish.log
-    # NOTE: Requires AWS certs to be in place before starting
+    # mqttdatainflux.service — enabled (runs influxdb2_aws_publish.py via myenv, restart=on-failure)
     sudo cp "$SERVICES_SRC/mqttdatainflux.service" /etc/systemd/system/
     sudo systemctl enable mqttdatainflux.service
-    log "${GREEN}  [ENABLED] mqttdatainflux.service${NC}"
+    log "${GREEN}  [ENABLED + AUTOSTART] mqttdatainflux.service${NC}"
 
-    # ── mybot2.service ─────────────────────────────────────────────
-    # Kept in Service_files but NOT enabled by default (inactive on original Pi)
+    # mybot2.service — installed but NOT enabled (was inactive on original Pi)
     sudo cp "$SERVICES_SRC/mybot2.service" /etc/systemd/system/ 2>/dev/null || true
-    log "${YELLOW}  [NOT ENABLED] mybot2.service — copied but disabled (enable manually if needed)${NC}"
+    log "${YELLOW}  [INSTALLED, NOT ENABLED] mybot2.service — enable manually if needed${NC}"
 
     sudo systemctl daemon-reload
-
-    # ── Standard services (auto-enabled by their packages) ─────────
-    # mosquitto  → enabled by apt install mosquitto
-    # influxdb   → enabled in STEP 5
-    # ssh        → enabled by default on Pi OS
-    # wayvnc     → enabled by apt install wayvnc (if needed)
-    # cron       → enabled by default
-    log "${GREEN}  Standard services (mosquitto, influxdb, ssh, cron) auto-enabled by packages${NC}"
 else
-    log "${RED}  Services folder not found — copy service files manually from USB backup${NC}"
+    log "${RED}  Services folder missing — copy .service files manually${NC}"
 fi
 
 # ─────────────────────────────────────────────
-# STEP 8 — AWS certs
+# STEP 10 — AWS certs
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 8/10] AWS certs...${NC}"
-CERTS_SRC="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/aws_certs"
-CERTS_DEST="/home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/aws_certs"
+log "${BLUE}[STEP 10/11] AWS certs...${NC}"
+CERTS_DEST="$PI4_DRIVE_DIR/pi4_python_projects/RASPI4-MAIN/aws_certs"
 
-if [ -d "$CERTS_SRC" ]; then
+# Check GitHub repo (aws_certs is committed there)
+CERTS_SRC="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/aws_certs"
+if [ -d "$CERTS_SRC" ] && [ "$(ls -A $CERTS_SRC)" ]; then
     mkdir -p "$CERTS_DEST"
     cp -r "$CERTS_SRC/." "$CERTS_DEST/"
-    log "${GREEN}  AWS certs in place${NC}"
+    log "${GREEN}  AWS certs copied from GitHub repo${NC}"
 else
-    log "${YELLOW}  AWS certs NOT found — restore from USB backup manually:${NC}"
-    log "${YELLOW}  cp -r /media/pi/USB/pre_reimage_XXXX/aws_certs/ $CERTS_DEST/${NC}"
+    # Try USB backup
+    for usb_path in /media/pi /media/${USER} /mnt; do
+        for backup_dir in $(ls -d ${usb_path}/*/pre_reimage_* 2>/dev/null); do
+            if [ -d "$backup_dir/aws_certs" ]; then
+                mkdir -p "$CERTS_DEST"
+                cp -r "$backup_dir/aws_certs/." "$CERTS_DEST/"
+                log "${GREEN}  AWS certs restored from USB backup${NC}"
+                break 2
+            fi
+        done
+    done
+    if [ ! -d "$CERTS_DEST" ] || [ -z "$(ls -A $CERTS_DEST 2>/dev/null)" ]; then
+        log "${RED}  AWS certs NOT found — mqttdatainflux will fail until restored${NC}"
+        log "${YELLOW}  Copy manually: cp -r /media/pi/USB/pre_reimage_*/aws_certs/ $CERTS_DEST/${NC}"
+    fi
 fi
 
 # ─────────────────────────────────────────────
-# STEP 9 — rclone (Google Drive)
+# STEP 11 — .bashrc & aliases
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 9/10] rclone Google Drive setup...${NC}"
-RCLONE_CONF_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/rclone.conf"
-if [ -f "$RCLONE_CONF_BACKUP" ]; then
-    mkdir -p /home/pi/.config/rclone
-    cp "$RCLONE_CONF_BACKUP" /home/pi/.config/rclone/rclone.conf
-    log "${GREEN}  rclone config restored${NC}"
-else
-    log "${YELLOW}  No rclone config backup found. Run manually: rclone config${NC}"
-fi
-
-# ─────────────────────────────────────────────
-# STEP 10 — .bashrc & aliases
-# ─────────────────────────────────────────────
-log ""
-log "${BLUE}[STEP 10/10] Restoring .bashrc & aliases...${NC}"
+log "${BLUE}[STEP 11/11] Restoring .bashrc & aliases...${NC}"
 BASHRC_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/bashrc.txt"
 ALIASES_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/.bash_aliases"
 
 if [ -f "$BASHRC_BACKUP" ]; then
     cp "$BASHRC_BACKUP" /home/pi/.bashrc
     log "${GREEN}  .bashrc restored${NC}"
-else
-    log "${YELLOW}  No bashrc backup found — skipping${NC}"
 fi
 
 if [ -f "$ALIASES_BACKUP" ]; then
     cp "$ALIASES_BACKUP" /home/pi/.bash_aliases
-    source /home/pi/.bash_aliases 2>/dev/null || true
-    log "${GREEN}  .bash_aliases restored — all aliases active${NC}"
-else
-    log "${YELLOW}  No .bash_aliases backup found — skipping${NC}"
+    log "${GREEN}  .bash_aliases restored — all aliases active on next login${NC}"
 fi
+
+# PATH for shell_scripts
+grep -q "pi4_drive/shell_scripts" /home/pi/.bashrc || \
+    echo 'export PATH="$PATH:/home/pi/pi4_drive/shell_scripts"' >> /home/pi/.bashrc
 
 # ─────────────────────────────────────────────
 # Done
@@ -281,15 +329,22 @@ fi
 log ""
 log "${GREEN}============================================${NC}"
 log "${GREEN}  POST-INSTALL COMPLETE!${NC}"
-log "${GREEN}  Log saved to: $LOG_FILE${NC}"
+log "${GREEN}  Log: $LOG_FILE${NC}"
 log "${GREEN}============================================${NC}"
 log ""
-log "${YELLOW}Manual steps remaining:${NC}"
-log "  1. Restore AWS certs from USB if not auto-copied"
-log "  2. Restore InfluxDB data: influx restore /path/to/backup/influxdb/"
-log "  3. Restore crontab:  crontab /path/to/backup/crontab_pi.txt"
-log "  4. Start services:   sudo systemctl start mybot.service mqttdatainflux.service"
-log "  5. Verify services:  systemctl status mybot.service mqttdatainflux.service"
-log "  6. Test MQTT:        mosquitto_pub -h localhost -t test -m hello -u mq -P mq"
-log "  7. Open InfluxDB UI: http://localhost:8086"
+log "${CYAN}Service autostart summary:${NC}"
+log "  mybot.service          → ENABLED (starts on boot)"
+log "  mqttdatainflux.service → ENABLED (starts on boot, needs AWS certs)"
+log "  mybot2.service         → installed but NOT enabled"
+log "  mosquitto              → ENABLED (starts on boot)"
+log "  influxdb               → ENABLED (starts on boot)"
+log "  ssh                    → ENABLED (default)"
+log ""
+log "${YELLOW}Remaining manual steps:${NC}"
+log "  1. If AWS certs missing:  cp -r /media/pi/USB/.../aws_certs/ $CERTS_DEST/"
+log "  2. Restore InfluxDB data: influx restore /media/pi/USB/.../influxdb/"
+log "  3. Restore crontab:       crontab /media/pi/USB/.../crontab/crontab_pi.txt"
+log "  4. Start services now:    sudo systemctl start mybot.service mqttdatainflux.service"
+log "  5. Verify:                bash $PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/scripts/3_verify_setup.sh"
+log "  6. Re-login for aliases:  source ~/.bashrc"
 log ""

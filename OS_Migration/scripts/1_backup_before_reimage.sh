@@ -86,8 +86,11 @@ find /home/pi/pi4_drive -name "*.env" -o -name "config.py" -o -name "*.cfg" 2>/d
 done
 cp /home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/config.py "$BACKUP_ROOT/configs/" 2>/dev/null || true
 cp /home/pi/.bashrc "$BACKUP_ROOT/configs/bashrc" 2>/dev/null || true
+cp /home/pi/.bash_aliases "$BACKUP_ROOT/configs/.bash_aliases" 2>/dev/null || true
 cp /home/pi/pi4_drive/bashrc.txt "$BACKUP_ROOT/configs/bashrc.txt" 2>/dev/null || true
-echo -e "${GREEN}  Done → configs/ folder${NC}"
+# rclone.conf — safe to backup to USB (NOT to GitHub, contains OAuth token)
+cp /home/pi/.config/rclone/rclone.conf "$BACKUP_ROOT/configs/rclone.conf" 2>/dev/null || true
+echo -e "${GREEN}  Done → configs/ folder (includes rclone.conf for Drive restore)${NC}"
 
 # --- 9. InfluxDB backup ---
 echo -e "${CYAN}[9/10] Backing up InfluxDB data...${NC}"
