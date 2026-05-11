@@ -40,12 +40,24 @@ echo "  Arch:   $ARCH | ${BITS}-bit userland"
 echo ""
 
 # Services
-echo -e "${CYAN}--- Services ---${NC}"
-check "Mosquitto running"       "systemctl is-active --quiet mosquitto"
-check "InfluxDB running"        "systemctl is-active --quiet influxdb"
-check "mybot.service enabled"   "systemctl is-enabled --quiet mybot.service"
-check "mqttdatainflux enabled"  "systemctl is-enabled --quiet mqttdatainflux.service"
-check "SSH running"             "systemctl is-active --quiet ssh"
+echo -e "${CYAN}--- Services (enabled + autostart) ---${NC}"
+# Standard services
+check "SSH enabled & running"        "systemctl is-active --quiet ssh"
+check "Mosquitto enabled"            "systemctl is-enabled --quiet mosquitto"
+check "Mosquitto running"            "systemctl is-active --quiet mosquitto"
+check "InfluxDB enabled"             "systemctl is-enabled --quiet influxdb"
+check "InfluxDB running"             "systemctl is-active --quiet influxdb"
+check "cron enabled"                 "systemctl is-enabled --quiet cron"
+# Custom services
+check "mybot enabled (autostart)"    "systemctl is-enabled --quiet mybot.service"
+check "mybot running"                "systemctl is-active --quiet mybot.service"
+check "mqttdatainflux enabled"       "systemctl is-enabled --quiet mqttdatainflux.service"
+check "mqttdatainflux running"       "systemctl is-active --quiet mqttdatainflux.service"
+# Log folder
+check "Error_and_Logs folder exists" "[ -d /home/pi/pi4_drive/Error_and_Logs ]"
+# Script paths the services depend on
+check "mybot script exists"          "[ -f /home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/main.py ]"
+check "influx script exists"         "[ -f /home/pi/pi4_drive/pi4_python_projects/influx_aws_publish/influxdb2_aws_publish.py ]"
 echo ""
 
 # Python

@@ -1,6 +1,7 @@
 [Unit]
 Description=MQTT Data to InfluxDB and AWS Service
 After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple

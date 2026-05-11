@@ -18,8 +18,9 @@ Environment="PATH=/home/pi/myenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/u
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/pi/.Xauthority"
 
-# Logging
-#StandardOutput=append:/home/pi/pi4_drive/Error_and_Logs/Output_mybot_service.log
+# Logging: Python logging writes to stdout; telepot network timeout noise goes to stderr.
+# Capture structured Python logs to the output file; suppress the raw telepot stderr flood.
+StandardOutput=append:/home/pi/pi4_drive/Error_and_Logs/Output_mybot_service.log
 StandardError=append:/home/pi/pi4_drive/Error_and_Logs/Error_mybot_service.log
 
 # Restart policy — restart on any exit (crash, OOM, signal, etc.)

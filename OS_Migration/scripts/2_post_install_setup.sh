@@ -176,19 +176,49 @@ log "${GREEN}  Mosquitto configured and running${NC}"
 # STEP 7 — Systemd services
 # ─────────────────────────────────────────────
 log ""
-log "${BLUE}[STEP 7/10] Installing systemd services...${NC}"
+log "${BLUE}[STEP 7/10] Installing & configuring systemd services...${NC}"
 SERVICES_SRC="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/services"
 
+# Create log folder required by service files
+mkdir -p /home/pi/pi4_drive/Error_and_Logs
+log "${GREEN}  Created Error_and_Logs folder${NC}"
+
 if [ -d "$SERVICES_SRC" ]; then
-    for svc in "$SERVICES_SRC"/*.service; do
-        svc_name=$(basename "$svc")
-        sudo cp "$svc" /etc/systemd/system/
-        sudo systemctl enable "$svc_name"
-        log "${GREEN}  Enabled: $svc_name${NC}"
-    done
+    # ── mybot.service ──────────────────────────────────────────────
+    # Runs: RASPI4-MAIN/main.py via myenv
+    # WorkingDir: /home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN
+    # Restart: always | crashes 5x in 5min → reboot
+    # Logs: Error_and_Logs/Output_mybot_service.log + Error_mybot_service.log
+    sudo cp "$SERVICES_SRC/mybot.service" /etc/systemd/system/
+    sudo systemctl enable mybot.service
+    log "${GREEN}  [ENABLED] mybot.service${NC}"
+
+    # ── mqttdatainflux.service ─────────────────────────────────────
+    # Runs: influx_aws_publish/influxdb2_aws_publish.py via myenv
+    # After: network-online.target | 5s startup delay
+    # Restart: on-failure | max 1 restart per 5min
+    # Logs: Error_and_Logs/Error_influxdb_aws_publish.log
+    # NOTE: Requires AWS certs to be in place before starting
+    sudo cp "$SERVICES_SRC/mqttdatainflux.service" /etc/systemd/system/
+    sudo systemctl enable mqttdatainflux.service
+    log "${GREEN}  [ENABLED] mqttdatainflux.service${NC}"
+
+    # ── mybot2.service ─────────────────────────────────────────────
+    # Kept in Service_files but NOT enabled by default (inactive on original Pi)
+    sudo cp "$SERVICES_SRC/mybot2.service" /etc/systemd/system/ 2>/dev/null || true
+    log "${YELLOW}  [NOT ENABLED] mybot2.service — copied but disabled (enable manually if needed)${NC}"
+
     sudo systemctl daemon-reload
+
+    # ── Standard services (auto-enabled by their packages) ─────────
+    # mosquitto  → enabled by apt install mosquitto
+    # influxdb   → enabled in STEP 5
+    # ssh        → enabled by default on Pi OS
+    # wayvnc     → enabled by apt install wayvnc (if needed)
+    # cron       → enabled by default
+    log "${GREEN}  Standard services (mosquitto, influxdb, ssh, cron) auto-enabled by packages${NC}"
 else
-    log "${YELLOW}  Services folder not found in OS_Migration — copy manually${NC}"
+    log "${RED}  Services folder not found — copy service files manually from USB backup${NC}"
 fi
 
 # ─────────────────────────────────────────────
