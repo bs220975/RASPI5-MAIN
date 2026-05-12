@@ -1,5 +1,20 @@
 # Raspberry Pi MQTT + Firebase Bridge Architecture
 
+## Quick Navigation
+
+- [Goal](#goal)
+- [Recommended Architecture](#recommended-architecture)
+- [Communication Model](#communication-model)
+- [Recommended MQTT Topic Design](#recommended-mqtt-topic-design)
+- [Raspberry Pi Bridge Responsibilities](#raspberry-pi-bridge-responsibilities)
+- [Recommended Migration Plan](#recommended-migration-plan)
+- [OTA Firmware Update Architecture](#ota-firmware-update-architecture)
+- [Information Required Before Implementation](#information-required-before-implementation)
+- [Minimum Information Needed To Start Coding](#minimum-information-needed-to-start-coding)
+- [Suggested Input Template](#suggested-input-template)
+
+---
+
 ## Goal
 
 Use the Raspberry Pi as the single always-on bridge between:
@@ -55,6 +70,8 @@ Firebase should be used for:
 
 Firebase should not be the primary transport between ESP devices and the local network.
 
+---
+
 ## Why this architecture is better
 
 Direct ESP -> Firebase communication is expensive on ESP01 and weaker ESP32 builds because:
@@ -91,6 +108,8 @@ ESP device -> MQTT publish -> Raspberry Pi bridge -> Firebase RTDB
 ```text
 Pi sensor event -> Raspberry Pi automation -> MQTT publish -> ESP device
 ```
+
+---
 
 ## Recommended MQTT Topic Design
 
@@ -149,6 +168,8 @@ For most device control:
 - QoS 0 is acceptable for frequent telemetry
 - QoS 1 is safer for relay commands and important state updates
 
+---
+
 ## Raspberry Pi Bridge Responsibilities
 
 The Pi bridge should run three logical jobs.
@@ -184,6 +205,8 @@ Instead:
 - push only useful cloud-visible state, alerts, summaries, and confirmations
 
 This reduces cloud traffic and avoids noisy RTDB updates.
+
+---
 
 ## Current Project State
 
@@ -242,6 +265,8 @@ Result:
 - much lighter firmware footprint
 - cleaner separation of responsibilities
 
+---
+
 ## Backward-Compatible Target State
 
 During migration, the Raspberry Pi can support both:
@@ -291,8 +316,169 @@ For a mixed ESP01 / ESP32 home automation network, the best long-term design is:
 
 This is the recommended architecture for lower memory usage, better local reliability, and simpler ESP firmware.
 
+---
 
-## =========================================================================
+# OTA Firmware Update Architecture
+
+The Raspberry Pi can also act as the OTA orchestration point for ESP firmware updates.
+
+This is better than having each ESP device communicate directly with Firebase or another cloud endpoint for firmware downloads.
+
+### Recommended OTA control path
+
+```text
+Firebase app -> Firebase RTDB command -> Raspberry Pi OTA controller -> MQTT OTA command -> ESP device
+```
+
+### Recommended OTA status path
+
+```text
+ESP device -> MQTT progress / status topics -> Raspberry Pi bridge -> Firebase RTDB
+```
+
+## OTA Design Recommendation
+
+Use the Raspberry Pi as the OTA controller, not just a command forwarder.
+
+Recommended model:
+
+- Firebase stores OTA intent, version metadata, and rollout request
+- Raspberry Pi validates the request
+- Raspberry Pi publishes an OTA command to the target ESP device over MQTT
+- Raspberry Pi serves the firmware file locally over HTTP on the LAN
+- ESP downloads the firmware from the Raspberry Pi
+- ESP flashes the image and reports progress and result through MQTT
+- Raspberry Pi writes progress and final state back to Firebase RTDB
+
+### Why this model is better
+
+- ESP devices avoid cloud TLS during large firmware downloads
+- local LAN firmware download is lighter and more reliable
+- Raspberry Pi can validate firmware version, target model, size, and checksum
+- Raspberry Pi can centralize rollout control and progress reporting
+
+## Less Preferred OTA Model
+
+It is possible for the Raspberry Pi to tell the ESP device to download firmware directly from a Firebase-linked or cloud-hosted URL.
+
+However, this is less ideal for low-memory devices because:
+
+- the ESP still needs cloud TLS for the firmware download
+- cloud download failures are more likely on weak Wi-Fi
+- large downloads are harder on small devices
+- Firebase RTDB itself is not meant to host firmware binaries
+
+If cloud hosting is used, Firebase should hold metadata only, such as:
+
+- desired firmware version
+- release notes or rollout flags
+- firmware URL
+- firmware checksum
+
+The actual firmware binary should preferably be hosted:
+
+- on the Raspberry Pi
+- on a simple HTTP server on the LAN
+- or in external object storage when local hosting is not practical
+
+## OTA Responsibilities
+
+### Raspberry Pi responsibilities
+
+- receive OTA request from Firebase RTDB
+- validate target device type and version compatibility
+- expose firmware images on a local HTTP endpoint
+- publish OTA command to the target device over MQTT
+- track progress and timeout state
+- update Firebase RTDB with progress, success, or failure
+
+### ESP device responsibilities
+
+- subscribe to OTA command topics
+- compare current version against requested version
+- download firmware from the Raspberry Pi HTTP endpoint
+- verify checksum if provided
+- flash using the appropriate OTA library
+- publish progress and final result over MQTT
+- reboot and publish new version after startup
+
+## Suggested MQTT Topics For OTA
+
+### OTA command topic
+
+- `home/<device_id>/cmd/ota`
+
+### OTA progress topics
+
+- `home/<device_id>/ota/progress`
+- `home/<device_id>/ota/status`
+- `home/<device_id>/state`
+
+## Example OTA Command Payload
+
+```json
+{
+  "version": "1.2.3",
+  "url": "http://192.168.1.10/fw/esp32_porch_v1.2.3.bin",
+  "sha256": "abc123...",
+  "size": 524288,
+  "force": false
+}
+```
+
+## Example OTA Status Payload
+
+```json
+{
+  "phase": "downloading",
+  "progress": 42,
+  "version": "1.2.3"
+}
+```
+
+## Example OTA Success Payload
+
+```json
+{
+  "phase": "success",
+  "version": "1.2.3"
+}
+```
+
+## Suggested Firebase Role For OTA
+
+Firebase should store OTA control and reporting data, not the firmware binary itself.
+
+Suggested RTDB areas:
+
+- `ota/commands/<device_id>`
+- `ota/status/<device_id>`
+- `ota/releases/<device_type>/latest`
+
+Suggested use:
+
+- app writes the target version or rollout request
+- Raspberry Pi consumes the request and starts the OTA sequence
+- Raspberry Pi updates progress and final state for app visibility
+
+## OTA Limitations And Hardware Notes
+
+ESP32 devices are generally good OTA candidates.
+
+ESP01 devices need extra care because:
+
+- available flash can be very limited
+- free space may not allow safe OTA
+- binary size and partition layout matter a lot
+
+For some ESP01 builds, OTA may be difficult or impossible without reducing firmware size or changing the flash strategy.
+
+Recommended expectation:
+
+- ESP32: preferred target for full OTA workflow
+- ESP01: validate flash size and firmware layout before promising OTA support
+
+---
 
 ## Information Required Before Implementation
 
