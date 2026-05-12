@@ -293,6 +293,88 @@ After migration, Firebase should mainly store:
 
 Firebase should not be used as a high-frequency device bus.
 
+## Heartbeat And Live Status Architecture
+
+In the recommended architecture, the Raspberry Pi should act as the heartbeat and presence coordinator for all devices.
+
+The app should read device liveliness and status from Firebase RTDB, not directly from ESP devices.
+
+### Recommended heartbeat path
+
+```text
+ESP device -> MQTT heartbeat / state -> Raspberry Pi bridge -> Firebase RTDB -> app
+```
+
+### Recommended device behavior
+
+Each MQTT-capable ESP device should publish:
+
+- `home/<device_id>/availability`
+- `home/<device_id>/state`
+
+The `availability` topic should indicate:
+
+- `online` when the device connects successfully
+- `offline` when the device disconnects unexpectedly
+
+This should be implemented using MQTT Last Will and Testament where possible.
+
+### Recommended Raspberry Pi behavior
+
+The Raspberry Pi should:
+
+- subscribe to availability and state topics for all managed devices
+- detect online/offline changes
+- update Firebase RTDB with selected status fields
+- keep a last-known-state cache locally
+- avoid direct IP polling for MQTT-native devices
+
+### Recommended Firebase fields per device
+
+For each device, Firebase RTDB can store:
+
+- `reachable`
+- `lastSeen`
+- `deviceType`
+- `room`
+- `firmwareVersion`
+- `rssi`
+- current device state such as relay, light, motion, or sensor values if needed by the app
+
+Example device status shape:
+
+```json
+{
+  "reachable": true,
+  "lastSeen": 1778570000000,
+  "relayState": true,
+  "rssi": -64,
+  "firmwareVersion": "1.2.3"
+}
+```
+
+### Recommended update policy
+
+The Raspberry Pi should not push every device state to Firebase every second.
+
+Better behavior is:
+
+- write immediately when a device goes online
+- write immediately when a device goes offline
+- write when an important state changes
+- refresh `lastSeen` at a moderate interval such as 30 to 120 seconds when needed
+
+This keeps the app live and responsive without generating noisy RTDB traffic.
+
+### Legacy device support during migration
+
+During migration, the Raspberry Pi can support both heartbeat models:
+
+- MQTT heartbeat for MQTT-native devices
+- HTTP `/status` polling for legacy HTTP-only devices
+
+This allows gradual migration without breaking current devices.
+
 ## Mosquitto Deployment Notes
 
 On the Raspberry Pi:
