@@ -8,6 +8,7 @@
 - [Recommended MQTT Topic Design](#recommended-mqtt-topic-design)
 - [Raspberry Pi Bridge Responsibilities](#raspberry-pi-bridge-responsibilities)
 - [Recommended Migration Plan](#recommended-migration-plan)
+- [Heartbeat And Live Status Architecture](#heartbeat-and-live-status-architecture)
 - [OTA Firmware Update Architecture](#ota-firmware-update-architecture)
 - [Information Required Before Implementation](#information-required-before-implementation)
 - [Minimum Information Needed To Start Coding](#minimum-information-needed-to-start-coding)
