@@ -215,22 +215,31 @@ class FirebaseLogger:
                         timeout=(10, None),  # (connect_timeout, no_read_timeout)
                     ) as resp:
                         event_type: Optional[str] = None
-                        for line in resp.iter_lines(decode_unicode=True):
+                        buf = ''
+                        # iter_content(chunk_size=None) yields data the instant
+                        # it arrives from the socket — no 512-byte buffer delay
+                        # that iter_lines() introduces by default.
+                        for raw in resp.iter_content(chunk_size=None,
+                                                     decode_unicode=True):
                             if stop.is_set():
                                 return
-                            if not line:
-                                event_type = None
-                                continue
-                            if line.startswith('event:'):
-                                event_type = line[6:].strip()
-                            elif line.startswith('data:') and event_type in ('put', 'patch'):
-                                try:
-                                    payload = json.loads(line[5:].strip())
-                                    data = payload.get('data')
-                                    if isinstance(data, bool):
-                                        callback(data)
-                                except Exception:
-                                    pass
+                            buf += raw
+                            while '\n' in buf:
+                                line, buf = buf.split('\n', 1)
+                                line = line.rstrip('\r')
+                                if not line:
+                                    event_type = None
+                                    continue
+                                if line.startswith('event:'):
+                                    event_type = line[6:].strip()
+                                elif line.startswith('data:') and event_type in ('put', 'patch'):
+                                    try:
+                                        payload = json.loads(line[5:].strip())
+                                        data = payload.get('data')
+                                        if isinstance(data, bool):
+                                            callback(data)
+                                    except Exception:
+                                        pass
                 except Exception as e:
                     if not stop.is_set():
                         logger.warning(
