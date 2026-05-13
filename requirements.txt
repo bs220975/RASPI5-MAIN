@@ -4,6 +4,7 @@
 # === Core Dependencies ===
 telepot>=12.7                  # Telegram Bot API
 requests>=2.28.0               # HTTP client for ESP device communication
+paho-mqtt>=1.6.0               # MQTT client for Mosquitto broker
 psutil>=5.9.0                  # System utilities (disk, CPU, memory)
 Pillow>=9.0.0                  # Image processing
 pytz>=2023.3                   # Timezone support

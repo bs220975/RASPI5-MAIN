@@ -39,6 +39,7 @@ from esp_devices import ESPDeviceManager
 from influxdb_logger import InfluxDBLogger
 from bot_commands import BotCommandHandler
 from firebase_logger import FirebaseLogger
+from mqtt_bridge import MqttBridge
 
 __version__ = '26.04.30'
 __author__ = 'Raspberry Pi Home Automation'
@@ -86,6 +87,7 @@ class RaspberryPiController:
         self.influx: Optional[InfluxDBLogger] = None
         self.bot_handler: Optional[BotCommandHandler] = None
         self.firebase: Optional[FirebaseLogger] = None
+        self.mqtt_bridge: Optional[MqttBridge] = None
 
         # Motion detection state
         self._last_motion_time: float = 0
@@ -102,9 +104,9 @@ class RaspberryPiController:
         # Firebase heartbeat
         self._last_firebase_push: float = 0
 
-        # Firebase light command polling (living_room → ESP01 at 192.168.1.85)
-        self._last_light_cmd_poll: float = 0
-        self._last_living_room_cmd: Optional[bool] = None  # tracks last seen state
+        # Last light command seen — prevents re-acting on the same value
+        # (set by the Firebase SSE stream callback; no longer polled)
+        self._last_living_room_cmd: Optional[bool] = None
 
         # Setup logging
         self._setup_logging()
@@ -209,8 +211,23 @@ class RaspberryPiController:
             self.firebase = FirebaseLogger(self.config.firebase)
             if self.firebase.connect():
                 logger.info("Firebase logger: OK")
+                self.firebase.start_command_stream(
+                    'living_room', self._on_firebase_light_cmd
+                )
+                logger.info("Firebase light command stream: started")
             else:
                 logger.warning("Firebase connection failed - live status disabled")
+
+            # Initialize MQTT bridge
+            logger.info("Initializing MQTT bridge...")
+            self.mqtt_bridge = MqttBridge(
+                self.config.mqtt,
+                on_lobby_state=self._on_lobby_mqtt_state,
+            )
+            if self.mqtt_bridge.start():
+                logger.info("MQTT bridge: started")
+            else:
+                logger.warning("MQTT bridge: start failed - HTTP fallback active")
 
             # Start bot message loop
             self.telegram.start_message_loop(self.bot_handler.handle_message)
@@ -320,16 +337,6 @@ class RaspberryPiController:
                         daemon=True
                     ).start()
 
-                # Firebase light command poll — living_room switch → ESP01 lobby relay
-                if self.firebase and (
-                    time.time() - self._last_light_cmd_poll >= 1.0
-                ):
-                    self._last_light_cmd_poll = time.time()
-                    threading.Thread(
-                        target=self._poll_light_command,
-                        daemon=True
-                    ).start()
-
                 # Check if motion detection is enabled
                 if self.bot_handler and not self.bot_handler.is_motion_enabled():
                     continue
@@ -418,9 +425,13 @@ class RaspberryPiController:
 
         def activate():
             try:
+                if self.mqtt_bridge and self.mqtt_bridge.is_connected:
+                    if self.mqtt_bridge.send_lobby_relay(True):
+                        return
+                # HTTP fallback — used until ESP01 firmware supports MQTT
                 success, response = self.esp.send_to_lobby("lighton")
                 if success:
-                    logger.debug(f"Light activated: {response}")
+                    logger.debug(f"Light activated (HTTP): {response}")
             except Exception as e:
                 logger.error(f"Light activation error: {e}")
 
@@ -449,35 +460,63 @@ class RaspberryPiController:
         except Exception as e:
             logger.error(f"Relay heartbeat error: {e}")
 
-    def _poll_light_command(self) -> None:
+    def _on_firebase_light_cmd(self, cmd: bool) -> None:
         """
-        Poll lights/living_room/state from Firebase and act on changes.
+        Handle a living room light command delivered by the Firebase SSE stream.
 
-        When the app toggles the Living Room switch:
-          state=True  → GET http://192.168.1.85/lighton
-          state=False → GET http://192.168.1.85/lightoff
-        Then writes lights/living_room/confirmed with the actual relay result.
+        Replaces the former 1-second REST polling loop.  Tries MQTT first;
+        falls back to HTTP when the MQTT bridge is unavailable.
         """
-        if not self.firebase or not self.esp:
-            return
+        if cmd == self._last_living_room_cmd:
+            return  # Firebase resends the current value on stream reconnect
+        self._last_living_room_cmd = cmd
+        logger.info(f'Firebase stream: living room {"ON" if cmd else "OFF"}')
+
+        def _execute() -> None:
+            try:
+                if self.mqtt_bridge and self.mqtt_bridge.is_connected:
+                    if self.mqtt_bridge.send_lobby_relay(cmd):
+                        # Confirmation will arrive via the MQTT state topic
+                        return
+                # HTTP fallback
+                if not self.esp:
+                    return
+                if cmd:
+                    success, _ = self.esp.lobby_light_on()
+                else:
+                    success, _ = self.esp.lobby_light_off()
+                if self.firebase:
+                    self.firebase.set_light_confirmed('living_room', success and cmd)
+                logger.info(
+                    f'Living room confirmed (HTTP): {"ON" if (success and cmd) else "OFF"}'
+                )
+            except Exception as e:
+                logger.warning(f'Light command execute error: {e}')
+
+        threading.Thread(target=_execute, daemon=True).start()
+
+    def _on_lobby_mqtt_state(self, payload: str) -> None:
+        """
+        Handle an ESP01 Lobby state message arriving over MQTT.
+
+        Updates Firebase relay status and living_room/confirmed so the
+        Android app sees the result of the last MQTT command.
+        """
+        import json as _json
+        relay_on = False
         try:
-            cmd = self.firebase.get_light_command('living_room')
-            if cmd is None or cmd == self._last_living_room_cmd:
-                return  # no change or read error
+            data = _json.loads(payload)
+            relay_on = bool(data.get('relay', False))
+        except (ValueError, AttributeError):
+            relay_on = payload.upper() == 'ON'
 
-            self._last_living_room_cmd = cmd
-            logger.info(f'Living room light command: {"ON" if cmd else "OFF"}')
-
-            if cmd:
-                success, _ = self.esp.lobby_light_on()
-            else:
-                success, _ = self.esp.lobby_light_off()
-
-            self.firebase.set_light_confirmed('living_room', success and cmd)
-            logger.info(f'Living room confirmed: {"ON" if (success and cmd) else "OFF"}')
-
-        except Exception as e:
-            logger.warning(f'Light command poll error: {e}')
+        def _update() -> None:
+            if self.firebase:
+                self.firebase.push_lobby_relay_status(
+                    reachable=True, relay_on=relay_on
+                )
+                self.firebase.set_light_confirmed('living_room', relay_on)
+        threading.Thread(target=_update, daemon=True).start()
 
     def _push_firebase_status(self) -> None:
         """Push current Pi status snapshot to Firebase."""
@@ -612,6 +651,10 @@ class RaspberryPiController:
         if self.influx:
             logger.info("Closing InfluxDB connection...")
             self.influx.close()
+
+        if self.mqtt_bridge:
+            logger.info("Stopping MQTT bridge...")
+            self.mqtt_bridge.stop()
 
         if self.firebase:
             logger.info("Marking Firebase offline...")

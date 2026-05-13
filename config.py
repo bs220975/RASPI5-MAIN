@@ -34,6 +34,7 @@ __all__ = [
     'VideoConfig',
     'RadarConfig',
     'FirebaseConfig',
+    'MqttConfig',
     'AppConfig',
     'config',
     'load_config',
@@ -320,6 +321,27 @@ class FirebaseConfig:
     heartbeat_interval: int = 60    # seconds between Pi status pushes
 
 
+@dataclass
+class MqttConfig:
+    """
+    Local Mosquitto broker configuration.
+
+    Set credentials via environment variables — never hardcode in source.
+
+    Environment variables:
+        MQTT_HOST: Broker hostname or IP (default: localhost)
+        MQTT_PORT: Broker port (default: 1883)
+        MQTT_USER: Username
+        MQTT_PASS: Password
+    """
+    host: str = field(default_factory=lambda: _get_env('MQTT_HOST', 'localhost'))
+    port: int = field(default_factory=lambda: _get_env_int('MQTT_PORT', 1883))
+    username: str = field(default_factory=lambda: _get_env('MQTT_USER', 'mq'))
+    password: str = field(default_factory=lambda: _get_env('MQTT_PASS', 'mq'))
+    client_id: str = 'raspi4-bridge'
+    keepalive: int = 60
+
+
 @dataclass(frozen=False)
 class AppConfig:
     """
@@ -334,6 +356,7 @@ class AppConfig:
     video: VideoConfig = field(default_factory=VideoConfig)
     radar: RadarConfig = field(default_factory=RadarConfig)
     firebase: FirebaseConfig = field(default_factory=FirebaseConfig)
+    mqtt: MqttConfig = field(default_factory=MqttConfig)
 
     # Application metadata
     script_version: str = 'V26.04.30'

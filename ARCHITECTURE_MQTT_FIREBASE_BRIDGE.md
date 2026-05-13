@@ -735,3 +735,97 @@ Migration mode:
 Registry format:
 - json
 ```
+
+---
+
+## Implementation Status
+
+Last updated: 2026-05-13
+
+---
+
+### Completed
+
+#### Phase 1 — Firebase SSE streaming (replaces 1-second REST poll)
+
+- [x] `firebase_logger.py` — added `start_command_stream(light_id, callback)`
+  - Opens a persistent SSE connection to `lights/<light_id>/state`
+  - Calls callback immediately on every value change
+  - Reconnects automatically on network errors
+  - `mark_offline()` stops the stream on clean shutdown
+- [x] `firebase_logger.py` — added `stop_command_stream()`
+- [x] `main.py` — removed 1-second Firebase REST polling loop and `_poll_light_command()`
+- [x] `main.py` — added `_on_firebase_light_cmd(cmd)` as the event-driven replacement
+  - Tries MQTT command first
+  - Falls back to HTTP if MQTT bridge is not connected
+  - Writes `lights/living_room/confirmed` after HTTP execution
+- [x] Firebase paths preserved unchanged: `lights/living_room/state`, `lights/living_room/confirmed`, `devices/RASPI-4`, `devices/ESP01-LL-RLY`, `lights/live`
+
+#### Phase 2 — MQTT bridge on the Raspberry Pi
+
+- [x] `mqtt_bridge.py` — new module, `MqttBridge` class
+  - Connects to local Mosquitto with configurable credentials
+  - Subscribes to `home/esp01/lobby/state` (QoS 1)
+  - Subscribes to `home/esp01/lobby/availability` (QoS 1)
+  - Publishes `ON` / `OFF` to `home/esp01/lobby/cmd/relay` (QoS 1)
+  - Handles connect, disconnect, and automatic reconnect via paho loop
+  - Graceful degradation if `paho-mqtt` is not installed
+- [x] `config.py` — added `MqttConfig` dataclass
+  - Reads `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASS` from environment variables
+  - Defaults: `localhost:1883 / mq / mq`
+- [x] `config.py` — `MqttConfig` added to `AppConfig`
+- [x] `main.py` — `MqttBridge` initialised in `initialize()`
+- [x] `main.py` — `_trigger_light_control()` (motion → light) tries MQTT first, HTTP fallback
+- [x] `main.py` — added `_on_lobby_mqtt_state(payload)` callback
+  - Handles both plain `ON` / `OFF` and JSON state payloads
+  - Updates `devices/ESP01-LL-RLY` and `lights/living_room/confirmed` in Firebase
+- [x] `main.py` — `cleanup()` stops MQTT bridge before marking Firebase offline
+- [x] `requirements.txt` — added `paho-mqtt>=1.6.0`
+- [x] `paho-mqtt` installed on the Pi
+- [x] Mosquitto verified running and `mq / mq` credentials confirmed working
+
+---
+
+### Pending
+
+#### ESP01 Lobby firmware update (required to activate MQTT path)
+
+The Pi bridge is ready and waiting.  HTTP fallback remains active until this is done.
+
+- [ ] Flash ESP01_Lobby (`192.168.1.85`) with MQTT-capable firmware
+  - Connect to Mosquitto at Pi LAN IP, port `1883`, user `mq`, pass `mq`
+  - Subscribe to `home/esp01/lobby/cmd/relay` — act on `ON` / `OFF`
+  - Publish relay state to `home/esp01/lobby/state` after acting
+  - Publish `online` to `home/esp01/lobby/availability` on connect
+  - Set `offline` as MQTT Last Will on unexpected disconnect
+- [ ] Confirm end-to-end flow after firmware flash:
+  1. Toggle Living Room switch in Android app
+  2. Firebase SSE delivers command to Pi
+  3. Pi publishes MQTT command to ESP01
+  4. ESP01 acts and publishes state back
+  5. Pi updates `lights/living_room/confirmed` in Firebase
+  6. App shows confirmed state
+
+#### Phase 3 — Route all app commands through the Pi MQTT bridge
+
+- [ ] Extend Firebase SSE stream to cover additional device command paths
+- [ ] Map each Firebase command path to its MQTT device topic
+- [ ] Pi writes confirmation back to Firebase after MQTT state is received
+
+#### Phase 4 — Remove direct cloud logic from ESP devices
+
+- [ ] Remove any Firebase direct writes remaining on ESP firmware
+- [ ] Confirm all ESP devices use MQTT only for communication
+- [ ] Pi becomes the sole cloud integration point
+
+#### Other devices — MQTT migration
+
+- [ ] ESP01_Porch (`192.168.1.89`) — light, HTTP only, migrate to MQTT
+- [ ] ESP32_GSM (`192.168.1.91`) — reed alert, migrate to MQTT
+- [ ] ESP32_OLED, ESP32_ENERGY, ESP8266_DHT — assess and schedule
+
+#### OTA firmware update architecture
+
+- [ ] Design and implement OTA orchestration on the Pi (see OTA section above)
+- [ ] Expose local HTTP firmware endpoint on the Pi
+- [ ] Implement OTA MQTT topics per device: `home/<device_id>/cmd/ota`, `home/<device_id>/ota/status`
