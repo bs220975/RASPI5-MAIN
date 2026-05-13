@@ -70,7 +70,10 @@ class MqttBridge:
             )
             return False
         try:
-            self._client = mqtt.Client(client_id=self._config.client_id)
+            self._client = mqtt.Client(
+            mqtt.CallbackAPIVersion.VERSION1,
+            client_id=self._config.client_id,
+        )
             if self._config.username:
                 self._client.username_pw_set(
                     self._config.username, self._config.password
@@ -78,7 +81,8 @@ class MqttBridge:
             self._client.on_connect    = self._on_connect
             self._client.on_disconnect = self._on_disconnect
             self._client.on_message    = self._on_message
-            self._client.connect(
+            self._client.reconnect_delay_set(min_delay=2, max_delay=60)
+            self._client.connect_async(
                 self._config.host, self._config.port, self._config.keepalive
             )
             self._client.loop_start()
