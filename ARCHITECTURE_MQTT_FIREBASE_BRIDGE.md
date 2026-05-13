@@ -740,7 +740,7 @@ Registry format:
 
 ## Implementation Status
 
-Last updated: 2026-05-13
+Last updated: 2026-05-13 (session 2)
 
 ---
 
@@ -755,6 +755,16 @@ Last updated: 2026-05-13
 | Firebase RTDB URL | `https://home-security-app-555cf-default-rtdb.asia-southeast1.firebasedatabase.app` |
 | RASPI4-MAIN repo | `https://github.com/bs220975/RASPI4-MAIN` — branch `main` |
 | ESP01-LL-RLY repo | `https://github.com/bs220975/ESP01-LL-RLY` — branch `master` |
+
+---
+
+### Lessons Learned
+
+**Bootstrap vs relay firmware (important)**
+The `esp01_bootstrap_ota` and `esp01_relay_ota` environments both upload to the same IP.
+Always use `pio run -e esp01_relay_ota --target upload` for the production relay firmware.
+Bootstrap (`esp01_bootstrap_ota`) is only for blank devices that need OTA capability first.
+Symptom of bootstrap running: device pings, port 80 closed, port 8266 open, no MQTT.
 
 ---
 
@@ -809,7 +819,7 @@ Last updated: 2026-05-13
 - [x] `main.py` — `cleanup()` stops MQTT bridge before marking Firebase offline
 - [x] `requirements.txt` — added `paho-mqtt>=1.6.0`
 
-#### ESP01-LL-RLY firmware — MQTT added (repo: ESP01-LL-RLY, branch master)
+#### ESP01-LL-RLY firmware — MQTT verified live (repo: ESP01-LL-RLY, branch master)
 
 - [x] `platformio.ini` — added `knolleary/PubSubClient@^2.8` to `lib_deps`
 - [x] `src/config/HardwareConfig.h` — added MQTT constants
@@ -827,61 +837,73 @@ Last updated: 2026-05-13
   - `mqttLoop()` — reconnects every 5 s if disconnected, called from `loop()`
   - HTTP `/lighton`, `/lightoff`, `/status` and ArduinoOTA preserved unchanged
   - 3-minute auto-off preserved, now also publishes MQTT state on timeout
-- [x] Firmware flashed to ESP01 via OTA (`pio run -e esp01_relay_ota --target upload`)
+- [x] Correct relay firmware flashed via OTA (`pio run -e esp01_relay_ota --target upload`)
+- [x] **ESP01 MQTT connection verified live:**
+  - `home/esp01/lobby/availability` → `online`
+  - `home/esp01/lobby/state` → `OFF`
+- [x] **Relay MQTT command test passed:**
+  - Pi sends `ON` → ESP01 relay clicks ON → publishes `state: ON`
+  - Pi sends `OFF` → ESP01 relay clicks OFF → publishes `state: OFF`
 
 #### GitHub — both repos pushed
 
-- [x] `RASPI4-MAIN` commit `9df43a6` pushed to `main`
+- [x] `RASPI4-MAIN` commit `b4a381f` pushed to `main`
 - [x] `ESP01-LL-RLY` commit `adb055a` pushed to `master`
 
 ---
 
-### Session End State — 2026-05-13
+### Session End State — 2026-05-13 session 2
 
-The ESP01 was flashed via OTA successfully.  After flashing, the device is
-pingable at `192.168.1.85` but has not yet connected to Mosquitto and is not
-responding to HTTP.  This is normal after OTA — the ESP01 requires a hard
-power cycle (unplug and replug) to boot cleanly into the new firmware.
-
-**The next session must start here.**
+ESP01 MQTT path is fully working at the broker level.
+MQTT commands verified: ON and OFF both travel correctly and relay responds.
+The Pi `main.py` has not yet been run for end-to-end app testing — that is the next step.
 
 ---
 
 ### Next Session — Start Here
 
-**Step 1 — Power cycle the ESP01** (if not already done)
-- Unplug and replug the ESP01 at `192.168.1.85`
-- Watch Mosquitto log for the connection: `sudo tail -f /var/log/mosquitto/mosquitto.log`
-- Expected log line: `New client connected from 192.168.1.85 as esp01-ll-rly`
-
-**Step 2 — Verify MQTT topics are live**
+**Step 1 — Confirm ESP01 is still online**
 ```bash
-mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/#" -v
+mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/#" -v -W 5
 ```
-Expected output after ESP01 boots:
-```
-home/esp01/lobby/availability  online
-home/esp01/lobby/state         OFF
-```
+Expected: `home/esp01/lobby/availability online` and `home/esp01/lobby/state OFF`
 
-**Step 3 — End-to-end test**
-1. Start `main.py` on the Pi (or confirm it is running as a service)
-2. Toggle the Living Room switch in the Android app
-3. Confirm the sequence:
-   - Firebase SSE delivers command to Pi
-   - Pi publishes `ON` or `OFF` to `home/esp01/lobby/cmd/relay`
-   - ESP01 acts on the command and publishes state back
-   - Pi writes `lights/living_room/confirmed` to Firebase
-   - App shows the confirmed state
+**Step 2 — Run main.py and do full end-to-end app test**
+```bash
+cd /home/pi/pi4_drive/Git_projects/RASPI4-MAIN
+python3 main.py
+```
+Then toggle the Living Room switch in the Android app and confirm:
+1. Firebase SSE delivers command to Pi (`_on_firebase_light_cmd` fires)
+2. Pi publishes MQTT command to `home/esp01/lobby/cmd/relay`
+3. ESP01 relay clicks and publishes state back
+4. Pi writes `lights/living_room/confirmed` to Firebase
+5. Android app shows confirmed state
 
-**Step 4 — Fix DHT11_ESP32 auth failure (known issue)**
-- Device `DHT11_ESP32-10B37A-V1` at `192.168.1.87` is attempting MQTT every 5 minutes but failing authentication
-- Add its credentials to Mosquitto or update its firmware with the correct `mq / mq` credentials
-- Command to add a new user to Mosquitto: `sudo mosquitto_passwd /etc/mosquitto/passwd <username>`
+**Step 3 — Fix DHT11_ESP32 auth failure**
+- Device `DHT11_ESP32-10B37A-V1` at `192.168.1.87` fails Mosquitto auth every 5 minutes
+- Two options:
+  - Add its credentials to Mosquitto: `sudo mosquitto_passwd /etc/mosquitto/passwd <username>`
+  - Or update its firmware to use `mq / mq`
+
+**Step 4 — Consider running main.py as a systemd service**
+- So it auto-starts on Pi reboot
+- Service file goes in `/etc/systemd/system/raspi4-automation.service`
 
 ---
 
 ### Pending
+
+#### End-to-end app test (immediate next task)
+
+- [ ] Run `main.py` and test Living Room switch via Android app
+- [ ] Confirm `lights/living_room/confirmed` updates correctly in Firebase
+- [ ] Confirm motion-triggered relay works via MQTT (walk in front of radar sensor at night)
+
+#### DHT11_ESP32 auth fix
+
+- [ ] `DHT11_ESP32-10B37A-V1` at `192.168.1.87` — failing Mosquitto auth every 5 min
+- [ ] Fix by adding credentials to Mosquitto or reflashing firmware with `mq / mq`
 
 #### Phase 3 — Route all app commands through the Pi MQTT bridge
 
@@ -899,8 +921,13 @@ home/esp01/lobby/state         OFF
 
 - [ ] ESP01_Porch (`192.168.1.89`) — light, HTTP only, migrate to MQTT
 - [ ] ESP32_GSM (`192.168.1.91`) — reed alert, migrate to MQTT
-- [ ] ESP8266_DHT (`192.168.1.87`) — DHT11 sensor, currently failing Mosquitto auth, fix credentials then assess
+- [ ] ESP8266_DHT (`192.168.1.87`) — DHT11 sensor, fix auth then migrate
 - [ ] ESP32_OLED (`192.168.1.102`), ESP32_ENERGY (`192.168.1.131`) — assess and schedule
+
+#### systemd service
+
+- [ ] Create `/etc/systemd/system/raspi4-automation.service` for `main.py`
+- [ ] Enable and test auto-start on reboot
 
 #### OTA firmware update architecture
 
