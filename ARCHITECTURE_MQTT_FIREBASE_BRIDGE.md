@@ -744,22 +744,49 @@ Last updated: 2026-05-13
 
 ---
 
+### Environment
+
+| Item | Value |
+|---|---|
+| Raspberry Pi LAN IP | `192.168.1.122` |
+| Mosquitto broker | `localhost:1883` |
+| Mosquitto credentials | `mq / mq` |
+| ESP01-LL-RLY static IP | `192.168.1.85` |
+| Firebase RTDB URL | `https://home-security-app-555cf-default-rtdb.asia-southeast1.firebasedatabase.app` |
+| RASPI4-MAIN repo | `https://github.com/bs220975/RASPI4-MAIN` — branch `main` |
+| ESP01-LL-RLY repo | `https://github.com/bs220975/ESP01-LL-RLY` — branch `master` |
+
+---
+
 ### Completed
+
+#### Infrastructure
+
+- [x] Mosquitto installed and running on Pi with authentication enabled
+- [x] `mq / mq` credentials verified working (`mosquitto_pub` test passed)
+- [x] `paho-mqtt` installed on Pi (`~/.local/lib/python3.13/site-packages/paho`)
+- [x] Git identity configured on Pi (`bs220975 / bs220975@gmail.com`)
+- [x] `gh` CLI `2.92.0` and `git` `2.47.3` both installed
 
 #### Phase 1 — Firebase SSE streaming (replaces 1-second REST poll)
 
 - [x] `firebase_logger.py` — added `start_command_stream(light_id, callback)`
   - Opens a persistent SSE connection to `lights/<light_id>/state`
   - Calls callback immediately on every value change
-  - Reconnects automatically on network errors
+  - Reconnects automatically on network errors with 5 s backoff
   - `mark_offline()` stops the stream on clean shutdown
 - [x] `firebase_logger.py` — added `stop_command_stream()`
 - [x] `main.py` — removed 1-second Firebase REST polling loop and `_poll_light_command()`
 - [x] `main.py` — added `_on_firebase_light_cmd(cmd)` as the event-driven replacement
-  - Tries MQTT command first
-  - Falls back to HTTP if MQTT bridge is not connected
+  - Deduplicates — skips if same command seen since last reconnect
+  - Tries MQTT first, falls back to HTTP if bridge is not connected
   - Writes `lights/living_room/confirmed` after HTTP execution
-- [x] Firebase paths preserved unchanged: `lights/living_room/state`, `lights/living_room/confirmed`, `devices/RASPI-4`, `devices/ESP01-LL-RLY`, `lights/live`
+- [x] Firebase paths preserved unchanged:
+  - `lights/living_room/state` — app command input
+  - `lights/living_room/confirmed` — Pi confirmation output
+  - `devices/RASPI-4` — Pi heartbeat
+  - `devices/ESP01-LL-RLY` — relay status
+  - `lights/live` — live motion state for Android app
 
 #### Phase 2 — MQTT bridge on the Raspberry Pi
 
@@ -768,43 +795,93 @@ Last updated: 2026-05-13
   - Subscribes to `home/esp01/lobby/state` (QoS 1)
   - Subscribes to `home/esp01/lobby/availability` (QoS 1)
   - Publishes `ON` / `OFF` to `home/esp01/lobby/cmd/relay` (QoS 1)
-  - Handles connect, disconnect, and automatic reconnect via paho loop
+  - Handles connect, disconnect, and automatic paho reconnect
   - Graceful degradation if `paho-mqtt` is not installed
 - [x] `config.py` — added `MqttConfig` dataclass
-  - Reads `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASS` from environment variables
-  - Defaults: `localhost:1883 / mq / mq`
+  - Reads `MQTT_HOST`, `MQTT_PORT`, `MQTT_USER`, `MQTT_PASS` from environment
+  - Compiled-in defaults: `localhost : 1883 / mq / mq`
 - [x] `config.py` — `MqttConfig` added to `AppConfig`
 - [x] `main.py` — `MqttBridge` initialised in `initialize()`
-- [x] `main.py` — `_trigger_light_control()` (motion → light) tries MQTT first, HTTP fallback
-- [x] `main.py` — added `_on_lobby_mqtt_state(payload)` callback
-  - Handles both plain `ON` / `OFF` and JSON state payloads
+- [x] `main.py` — `_trigger_light_control()` (motion → relay) tries MQTT first, HTTP fallback
+- [x] `main.py` — `_on_lobby_mqtt_state(payload)` callback
+  - Handles both plain `ON` / `OFF` and JSON `{"relay": true}` payloads
   - Updates `devices/ESP01-LL-RLY` and `lights/living_room/confirmed` in Firebase
 - [x] `main.py` — `cleanup()` stops MQTT bridge before marking Firebase offline
 - [x] `requirements.txt` — added `paho-mqtt>=1.6.0`
-- [x] `paho-mqtt` installed on the Pi
-- [x] Mosquitto verified running and `mq / mq` credentials confirmed working
+
+#### ESP01-LL-RLY firmware — MQTT added (repo: ESP01-LL-RLY, branch master)
+
+- [x] `platformio.ini` — added `knolleary/PubSubClient@^2.8` to `lib_deps`
+- [x] `src/config/HardwareConfig.h` — added MQTT constants
+  - `MQTT_BROKER   192.168.1.122`
+  - `MQTT_PORT     1883`
+  - `MQTT_CLIENT_ID  esp01-ll-rly`
+  - `MQTT_USER / MQTT_PASS  mq / mq`
+  - `MQTT_TOPIC_CMD   home/esp01/lobby/cmd/relay`
+  - `MQTT_TOPIC_STATE home/esp01/lobby/state`
+  - `MQTT_TOPIC_AVAIL home/esp01/lobby/availability`
+- [x] `src/main.cpp` — MQTT added alongside existing HTTP server
+  - `mqttConnect()` — connects with Last Will (`offline`, retained), publishes `online`, subscribes cmd topic
+  - `mqttCallback()` — receives `ON` / `OFF`, calls `setRelay()`
+  - `publishState()` — publishes retained state on every relay change (HTTP, MQTT, and auto-off)
+  - `mqttLoop()` — reconnects every 5 s if disconnected, called from `loop()`
+  - HTTP `/lighton`, `/lightoff`, `/status` and ArduinoOTA preserved unchanged
+  - 3-minute auto-off preserved, now also publishes MQTT state on timeout
+- [x] Firmware flashed to ESP01 via OTA (`pio run -e esp01_relay_ota --target upload`)
+
+#### GitHub — both repos pushed
+
+- [x] `RASPI4-MAIN` commit `9df43a6` pushed to `main`
+- [x] `ESP01-LL-RLY` commit `adb055a` pushed to `master`
+
+---
+
+### Session End State — 2026-05-13
+
+The ESP01 was flashed via OTA successfully.  After flashing, the device is
+pingable at `192.168.1.85` but has not yet connected to Mosquitto and is not
+responding to HTTP.  This is normal after OTA — the ESP01 requires a hard
+power cycle (unplug and replug) to boot cleanly into the new firmware.
+
+**The next session must start here.**
+
+---
+
+### Next Session — Start Here
+
+**Step 1 — Power cycle the ESP01** (if not already done)
+- Unplug and replug the ESP01 at `192.168.1.85`
+- Watch Mosquitto log for the connection: `sudo tail -f /var/log/mosquitto/mosquitto.log`
+- Expected log line: `New client connected from 192.168.1.85 as esp01-ll-rly`
+
+**Step 2 — Verify MQTT topics are live**
+```bash
+mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/#" -v
+```
+Expected output after ESP01 boots:
+```
+home/esp01/lobby/availability  online
+home/esp01/lobby/state         OFF
+```
+
+**Step 3 — End-to-end test**
+1. Start `main.py` on the Pi (or confirm it is running as a service)
+2. Toggle the Living Room switch in the Android app
+3. Confirm the sequence:
+   - Firebase SSE delivers command to Pi
+   - Pi publishes `ON` or `OFF` to `home/esp01/lobby/cmd/relay`
+   - ESP01 acts on the command and publishes state back
+   - Pi writes `lights/living_room/confirmed` to Firebase
+   - App shows the confirmed state
+
+**Step 4 — Fix DHT11_ESP32 auth failure (known issue)**
+- Device `DHT11_ESP32-10B37A-V1` at `192.168.1.87` is attempting MQTT every 5 minutes but failing authentication
+- Add its credentials to Mosquitto or update its firmware with the correct `mq / mq` credentials
+- Command to add a new user to Mosquitto: `sudo mosquitto_passwd /etc/mosquitto/passwd <username>`
 
 ---
 
 ### Pending
-
-#### ESP01 Lobby firmware update (required to activate MQTT path)
-
-The Pi bridge is ready and waiting.  HTTP fallback remains active until this is done.
-
-- [ ] Flash ESP01_Lobby (`192.168.1.85`) with MQTT-capable firmware
-  - Connect to Mosquitto at Pi LAN IP, port `1883`, user `mq`, pass `mq`
-  - Subscribe to `home/esp01/lobby/cmd/relay` — act on `ON` / `OFF`
-  - Publish relay state to `home/esp01/lobby/state` after acting
-  - Publish `online` to `home/esp01/lobby/availability` on connect
-  - Set `offline` as MQTT Last Will on unexpected disconnect
-- [ ] Confirm end-to-end flow after firmware flash:
-  1. Toggle Living Room switch in Android app
-  2. Firebase SSE delivers command to Pi
-  3. Pi publishes MQTT command to ESP01
-  4. ESP01 acts and publishes state back
-  5. Pi updates `lights/living_room/confirmed` in Firebase
-  6. App shows confirmed state
 
 #### Phase 3 — Route all app commands through the Pi MQTT bridge
 
@@ -822,7 +899,8 @@ The Pi bridge is ready and waiting.  HTTP fallback remains active until this is 
 
 - [ ] ESP01_Porch (`192.168.1.89`) — light, HTTP only, migrate to MQTT
 - [ ] ESP32_GSM (`192.168.1.91`) — reed alert, migrate to MQTT
-- [ ] ESP32_OLED, ESP32_ENERGY, ESP8266_DHT — assess and schedule
+- [ ] ESP8266_DHT (`192.168.1.87`) — DHT11 sensor, currently failing Mosquitto auth, fix credentials then assess
+- [ ] ESP32_OLED (`192.168.1.102`), ESP32_ENERGY (`192.168.1.131`) — assess and schedule
 
 #### OTA firmware update architecture
 
