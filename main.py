@@ -104,9 +104,10 @@ class RaspberryPiController:
         # Firebase heartbeat
         self._last_firebase_push: float = 0
 
-        # Last light command seen — prevents re-acting on the same value
-        # (set by the Firebase SSE stream callback; no longer polled)
+        # Last light command EXECUTED — used to skip duplicate reconnect replays
         self._last_living_room_cmd: Optional[bool] = None
+        # Debounce timer — cancelled/reset on each rapid incoming command
+        self._light_cmd_timer: Optional[threading.Timer] = None
 
         # Setup logging
         self._setup_logging()
@@ -464,36 +465,50 @@ class RaspberryPiController:
         """
         Handle a living room light command delivered by the Firebase SSE stream.
 
-        Replaces the former 1-second REST polling loop.  Tries MQTT first;
-        falls back to HTTP when the MQTT bridge is unavailable.
+        Debounces rapid bursts (e.g. Firebase replaying queued ON/OFF/ON on
+        reconnect) — only the final command in a 400 ms window is executed.
+        Dedup runs at execute-time so reconnect replays of the current state
+        are silently skipped without resetting the debounce window.
         """
-        if cmd == self._last_living_room_cmd:
-            return  # Firebase resends the current value on stream reconnect
-        self._last_living_room_cmd = cmd
         logger.info(f'Firebase stream: living room {"ON" if cmd else "OFF"}')
 
-        def _execute() -> None:
-            try:
-                if self.mqtt_bridge and self.mqtt_bridge.is_connected:
-                    if self.mqtt_bridge.send_lobby_relay(cmd):
-                        # Confirmation will arrive via the MQTT state topic
-                        return
-                # HTTP fallback
-                if not self.esp:
-                    return
-                if cmd:
-                    success, _ = self.esp.lobby_light_on()
-                else:
-                    success, _ = self.esp.lobby_light_off()
-                if self.firebase:
-                    self.firebase.set_light_confirmed('living_room', success and cmd)
-                logger.info(
-                    f'Living room confirmed (HTTP): {"ON" if (success and cmd) else "OFF"}'
-                )
-            except Exception as e:
-                logger.warning(f'Light command execute error: {e}')
+        # Cancel any pending execution and arm a fresh timer
+        if self._light_cmd_timer is not None:
+            self._light_cmd_timer.cancel()
 
-        threading.Thread(target=_execute, daemon=True).start()
+        self._light_cmd_timer = threading.Timer(
+            0.4, self._execute_light_cmd, args=(cmd,)
+        )
+        self._light_cmd_timer.daemon = True
+        self._light_cmd_timer.start()
+
+    def _execute_light_cmd(self, cmd: bool) -> None:
+        """Execute the debounced light command — skip if already in this state."""
+        if cmd == self._last_living_room_cmd:
+            logger.debug(f'Light cmd {"ON" if cmd else "OFF"} skipped — same as last executed')
+            return
+        self._last_living_room_cmd = cmd
+        logger.info(f'Executing light command: {"ON" if cmd else "OFF"}')
+
+        try:
+            if self.mqtt_bridge and self.mqtt_bridge.is_connected:
+                if self.mqtt_bridge.send_lobby_relay(cmd):
+                    # Confirmation arrives via MQTT state topic → _on_lobby_mqtt_state
+                    return
+            # HTTP fallback
+            if not self.esp:
+                return
+            if cmd:
+                success, _ = self.esp.lobby_light_on()
+            else:
+                success, _ = self.esp.lobby_light_off()
+            if self.firebase:
+                self.firebase.set_light_confirmed('living_room', success and cmd)
+            logger.info(
+                f'Living room confirmed (HTTP): {"ON" if (success and cmd) else "OFF"}'
+            )
+        except Exception as e:
+            logger.warning(f'Light command execute error: {e}')
 
     def _on_lobby_mqtt_state(self, payload: str) -> None:
         """
@@ -651,6 +666,9 @@ class RaspberryPiController:
         if self.influx:
             logger.info("Closing InfluxDB connection...")
             self.influx.close()
+
+        if self._light_cmd_timer is not None:
+            self._light_cmd_timer.cancel()
 
         if self.mqtt_bridge:
             logger.info("Stopping MQTT bridge...")
