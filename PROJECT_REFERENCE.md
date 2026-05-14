@@ -2,8 +2,8 @@
 
 Raspberry Pi 4 home automation bridge. Runs as a systemd service (`mybot.service`)
 and coordinates local sensors, ESP IoT devices, Firebase RTDB, Telegram, and InfluxDB.
-The Pi is the single integration point — ESP devices speak only local MQTT, never
-direct cloud TLS.
+The Pi is the integration point for relay control and logging. ESP32-RADAR also speaks
+directly to AWS IoT / Firebase / Telegram for security alerts that must survive a Pi outage.
 
 > For OS setup, reimaging, service files, aliases, and Google Drive backup see
 > [`OS_Migration/PROJECT_REFERENCE.md`](OS_Migration/PROJECT_REFERENCE.md).
@@ -15,9 +15,11 @@ direct cloud TLS.
 | Date | Change |
 |---|---|
 | 2026-05-14 | Created PROJECT_REFERENCE.md |
-| 2026-05-14 | MQTT Option B+C: added porch relay (ESP01-RELAY) + radar motion (ESP32-RADAR) to `mqtt_bridge.py`; night-time relay automation + 5-min off timer in `main.py`; Firebase SSE stream for `lights/lobby2`; `push_porch_relay_status()` in `firebase_logger.py`; multi-stream `start_command_stream()` |
+| 2026-05-14 | MQTT Option B+C: added porch relay (ESP01-RELAY) + radar motion (ESP32-RADAR) to `mqtt_bridge.py`; night-time relay automation + 5-min off timer in `main.py`; Firebase SSE stream for `lights/lobby`; `push_porch_relay_status()` in `firebase_logger.py`; multi-stream `start_command_stream()` |
 | 2026-05-14 | Video quality: CRF 26 re-encode, bitrate 1 Mbps, motion timeout 10 s, max duration 120 s |
 | 2026-05-14 | Reed switch door sensor: GPIO 26, polling thread, 300 ms debounce, Telegram alerts |
+| 2026-05-14 | Fix Firebase path `lobby` → `lobby` in Pi `main.py` (SSE stream + confirmed write) and ESP32-RADAR `RadarMotion.cpp` (Pi-down RTDB fallback) — lobby light from app was silently failing |
+| 2026-05-14 | Restore `AWSService` in ESP32-RADAR `main.cpp`: motion alert siren path is direct ESP32 → AWS IoT → Lambda → FCM (survives Pi outage); local MQTT motion publish kept alongside for porch relay via Pi |
 | 2026-05-13 | Phase 1: Firebase SSE stream replaces 1 s REST poll for living room light commands |
 | 2026-05-13 | Phase 2: MQTT bridge (lobby relay ESP01-LL-RLY) verified live |
 
@@ -40,6 +42,30 @@ Serial `/dev/serial0` — LD2420 radar sensor (115200 baud, configured in `Radar
 
 ## Architecture
 
+### ESP32-RADAR — direct cloud paths (Pi-independent)
+
+These paths fire regardless of Pi state. Security alerts must survive a Pi outage.
+
+```
+Radar sensor (GPIO19) triggers HIGH
+    │
+    ├── AWSService → AWS IoT topic: RADAR2_MOTION
+    │                   └── Lambda → FCM topic: aws_radar2
+    │                                   └── App siren 🔔
+    │
+    ├── TelegramService → Telegram API (direct HTTPS)
+    │                       └── Motion alert to chat
+    │
+    ├── Firebase RTDB (Pi-down resilience only)
+    │       └── HTTPS PATCH lights/lobby → {state, confirmed}
+    │           (keeps app bulb in sync when Pi is unreachable)
+    │
+    └── AWS IoT Shadow → radars/{radar2} heartbeat (every 2 min)
+                            └── Flutter app radar status
+```
+
+### Pi / local MQTT paths (Pi-dependent)
+
 ```
 Android App
     │
@@ -48,11 +74,11 @@ Android App
     │                                            └──► MQTT → home/esp01/lobby/cmd/relay
     │                                                      → ESP01-LL-RLY (lobby light)
     │
-    └── lights/lobby2/state  ──────SSE──►  Pi: _on_firebase_porch_light_cmd
+    └── lights/lobby/state  ───────SSE──►  Pi: _on_firebase_porch_light_cmd
                                                └──► MQTT → home/esp01/porch/cmd/relay
                                                          → ESP01-RELAY (porch light)
 
-ESP32-RADAR (motion sensor)
+ESP32-RADAR (motion sensor) — also publishes via local MQTT for relay control:
     └── MQTT home/esp32/radar2/motion  ──►  Pi: _on_radar_motion
                                                ├── night (18–06)? → send_porch_relay(ON)
                                                └── motion OFF?    → 5-min timer → relay OFF
@@ -65,7 +91,7 @@ ESP01-LL-RLY (lobby relay)
 ESP01-RELAY (porch relay)
     └── MQTT home/esp01/porch/state  ──►  Pi: _on_porch_mqtt_state
                                               └── Firebase PATCH /devices/esp01_relay/
-                                                  lights/lobby2/confirmed
+                                                  lights/lobby/confirmed
 
 Pi local sensors (GPIO)
     ├── LD2420 radar → _process_motion → _trigger_light_control (lobby light, night only)
@@ -77,6 +103,18 @@ Pi local sensors (GPIO)
 Pi → Firebase heartbeat (every 60 s)
     └── PATCH /devices/RASPI-4/ {cpuTemp, uptime, motionDetected, recording}
 ```
+
+### What survives a Pi outage
+
+| Feature | Survives Pi down? |
+|---|---|
+| App siren on motion | ✅ ESP32 → AWS IoT → Lambda → FCM |
+| Telegram motion alerts | ✅ ESP32 → Telegram API direct |
+| AWS shadow heartbeat | ✅ ESP32 → AWS IoT |
+| App bulb state (lobby) | ✅ ESP32 → Firebase RTDB direct |
+| Porch relay (motion triggered) | ❌ Pi required (MQTT path) |
+| App lobby/porch switch | ❌ Pi required (Firebase SSE → MQTT) |
+| DHT11 temperature logging | ❌ Pi required |
 
 ---
 
@@ -128,20 +166,20 @@ Database: `https://home-security-app-555cf-default-rtdb.asia-southeast1.firebase
 | `/devices/esp01_relay/` | MQTT porch state | `lastSeen`, `reachable`, `relayState` |
 | `/lights/live/` | Pi radar motion changes | `motionDetected`, `lastUpdate` |
 | `/lights/living_room/confirmed` | After lobby relay MQTT state arrives | `bool` |
-| `/lights/lobby2/confirmed` | After porch relay MQTT state arrives | `bool` |
+| `/lights/lobby/confirmed` | After porch relay MQTT state arrives | `bool` |
 
 ### Read by Pi (SSE streams)
 
 | Path | Callback | Action |
 |---|---|---|
 | `/lights/living_room/state` | `_on_firebase_light_cmd` | → MQTT lobby relay ON/OFF |
-| `/lights/lobby2/state` | `_on_firebase_porch_light_cmd` | → MQTT porch relay ON/OFF |
+| `/lights/lobby/state` | `_on_firebase_porch_light_cmd` | → MQTT porch relay ON/OFF |
 
 ### Written directly by ESP32-RADAR (Pi-down resilience)
 
 | Path | Fields |
 |---|---|
-| `/lights/lobby2/` | `state`, `confirmed` (direct HTTPS PATCH from ESP32 firmware) |
+| `/lights/lobby/` | `state`, `confirmed` (direct HTTPS PATCH from ESP32 firmware) |
 
 ---
 
@@ -156,7 +194,7 @@ Database: `https://home-security-app-555cf-default-rtdb.asia-southeast1.firebase
 
 **MQTT callbacks:**
 - `_on_lobby_mqtt_state(payload)` — updates `/devices/ESP01-LL-RLY/` + `living_room/confirmed`
-- `_on_porch_mqtt_state(payload)` — updates `/devices/esp01_relay/` + `lobby2/confirmed`
+- `_on_porch_mqtt_state(payload)` — updates `/devices/esp01_relay/` + `lobby/confirmed`
 - `_on_radar_motion(payload)` — night check, porch relay ON/OFF, 5-min off timer
 
 **Firebase SSE callbacks:**
@@ -205,7 +243,7 @@ Pure HTTPS REST to Firebase RTDB (no auth — database rules allow public write)
 
 **SSE streams (multiple concurrent, keyed by `light_id`):**
 - `start_command_stream(light_id, callback)` — streams `lights/{light_id}/state`
-- Currently active: `living_room` and `lobby2`
+- Currently active: `living_room` and `lobby`
 - `stop_command_stream()` — stops all streams
 
 ---
@@ -284,6 +322,13 @@ exclusively via MQTT, with its own HTTP fallback to ESP32-RADAR handled on-devic
 
 ## Automation Logic
 
+### ESP32-RADAR → App siren (direct, 2026-05-14)
+- Trigger: radar sensor GPIO19 HIGH → EventBus `radar_motion=1`
+- Action: `AWSService.handleRadar()` publishes to AWS IoT topic `RADAR2_MOTION`
+- AWS IoT Rule → Lambda → FCM topic `aws_radar2` with sound `siren`
+- Cooldown: 20 seconds (enforced in Lambda in-memory)
+- **No Pi involvement — fires even during Pi outage**
+
 ### Pi local radar → lobby light (existing)
 - Trigger: LD2420 radar motion detected
 - Condition: 18:00 ≤ hour < 08:00, cooldown 30 s since last activation
@@ -305,7 +350,7 @@ exclusively via MQTT, with its own HTTP fallback to ESP32-RADAR handled on-devic
 - MQTT primary → HTTP fallback if MQTT bridge down
 
 ### App-commanded porch light
-- Firebase SSE on `lights/lobby2/state` → `_on_firebase_porch_light_cmd`
+- Firebase SSE on `lights/lobby/state` → `_on_firebase_porch_light_cmd`
 - Same debounce + dedup pattern
 - MQTT only (no HTTP fallback from Pi — ESP01-RELAY handles its own HTTP fallback)
 
@@ -365,4 +410,4 @@ mosquitto_pub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/cmd/relay" -
 | Porch light stays on after dawn | 5-min off timer only fires on `motion=OFF` from radar; check ESP32-RADAR is publishing MQTT |
 | Firebase writes failing | Check internet connectivity; Firebase RTDB rules allow public write on `devices/`, `lights/` |
 | `mybot.service` crash-looping | Check `logs/error_log.txt`; check GPIO conflicts; check sensor hardware connected |
-| `start_command_stream` logs two streams | Expected — `living_room` and `lobby2` both start on init |
+| `start_command_stream` logs two streams | Expected — `living_room` and `lobby` both start on init |
