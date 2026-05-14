@@ -374,17 +374,18 @@ class GPIOSensorManager(BaseSensor):
             except Exception as e:
                 logger.warning(f"PIR sensor init failed: {e}")
 
-            # Reed switch: pull_up=True — pin HIGH = door open, LOW = door closed
+            # Reed switch: internal pull-up, BOTH edges via RPi.GPIO event detect.
+            # Using RPi.GPIO directly (not gpiozero) avoids mixing conflicts.
+            # pull-up HIGH = door open, LOW = door closed (switch pulls to GND).
             try:
-                self._reed_sensor = DigitalInputDevice(
+                GPIO.setup(self._config.reed_switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
+                GPIO.add_event_detect(
                     self._config.reed_switch_pin,
-                    pull_up=True,
-                    bounce_time=0.05
+                    GPIO.BOTH,
+                    callback=self._reed_callback,
+                    bouncetime=50
                 )
-                # Edge-triggered callbacks — fire immediately on state change
-                self._reed_sensor.when_deactivated = self._reed_opened   # HIGH → door open
-                self._reed_sensor.when_activated   = self._reed_closed   # LOW  → door closed
-                door_state = "open" if self._reed_sensor.value == 1 else "closed"
+                door_state = "open" if GPIO.input(self._config.reed_switch_pin) else "closed"
                 logger.info(f"Reed switch initialized on GPIO {self._config.reed_switch_pin} — door is {door_state}")
             except Exception as e:
                 logger.warning(f"Reed switch init failed: {e}")
@@ -403,28 +404,25 @@ class GPIOSensorManager(BaseSensor):
             logger.error(f"GPIO initialization error: {e}")
             return False
 
-    def _reed_opened(self) -> None:
-        """Internal callback — reed switch opened (door opened)."""
-        logger.info("Reed switch: door OPENED")
-        if self._on_door_open:
-            threading.Thread(target=self._on_door_open, daemon=True).start()
-
-    def _reed_closed(self) -> None:
-        """Internal callback — reed switch closed (door closed)."""
-        logger.info("Reed switch: door CLOSED")
-        if self._on_door_close:
-            threading.Thread(target=self._on_door_close, daemon=True).start()
+    def _reed_callback(self, channel: int) -> None:
+        """RPi.GPIO BOTH-edge callback — reads actual pin state to determine direction."""
+        pin_high = GPIO.input(channel)
+        if pin_high:
+            logger.info("Reed switch: door OPENED")
+            if self._on_door_open:
+                threading.Thread(target=self._on_door_open, daemon=True).start()
+        else:
+            logger.info("Reed switch: door CLOSED")
+            if self._on_door_close:
+                threading.Thread(target=self._on_door_close, daemon=True).start()
 
     def cleanup(self) -> None:
         """Cleanup GPIO resources."""
-        if self._reed_sensor:
+        if GPIO_AVAILABLE:
             try:
-                self._reed_sensor.when_deactivated = None
-                self._reed_sensor.when_activated = None
-                self._reed_sensor.close()
+                GPIO.remove_event_detect(self._config.reed_switch_pin)
             except Exception:
                 pass
-        if GPIO_AVAILABLE:
             try:
                 GPIO.cleanup()
             except Exception as e:
@@ -472,9 +470,11 @@ class GPIOSensorManager(BaseSensor):
 
     def read_reed(self) -> bool:
         """Read reed switch state. Returns True if door is open."""
-        if self._reed_sensor:
-            # pull_up=True: value=1 (HIGH) means switch open = door open
-            return bool(self._reed_sensor.value)
+        if GPIO_AVAILABLE and self._initialized:
+            try:
+                return bool(GPIO.input(self._config.reed_switch_pin))
+            except Exception:
+                pass
         return False
 
     def set_led(self, state: bool) -> None:
