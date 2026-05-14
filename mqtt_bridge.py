@@ -15,8 +15,8 @@ Topics managed:
     home/esp01/porch/state        ESP01-RELAY → Pi:   ON / OFF
     home/esp01/porch/availability ESP01-RELAY → Pi:   online / offline
 
-    home/esp32/radar1/motion      ESP32-RADAR → Pi:   ON / OFF
-    home/esp32/radar1/availability ESP32-RADAR → Pi:  online / offline
+    home/esp32/radar2/motion      ESP32-RADAR → Pi:   ON / OFF
+    home/esp32/radar2/availability ESP32-RADAR → Pi:  online / offline
 """
 import logging
 from typing import Callable, Optional
@@ -41,8 +41,8 @@ _PORCH_STATE_TOPIC = 'home/esp01/porch/state'
 _PORCH_AVAIL_TOPIC = 'home/esp01/porch/availability'
 
 # ── Radar sensor (ESP32-RADAR at 192.168.1.87) ──────────────────────────────
-_RADAR_MOTION_TOPIC = 'home/esp32/radar1/motion'
-_RADAR_AVAIL_TOPIC  = 'home/esp32/radar1/availability'
+_RADAR_MOTION_TOPIC = 'home/esp32/radar2/motion'
+_RADAR_AVAIL_TOPIC  = 'home/esp32/radar2/availability'
 
 
 class MqttBridge:

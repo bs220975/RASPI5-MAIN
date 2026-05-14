@@ -53,7 +53,7 @@ Android App
                                                          → ESP01-RELAY (porch light)
 
 ESP32-RADAR (motion sensor)
-    └── MQTT home/esp32/radar1/motion  ──►  Pi: _on_radar_motion
+    └── MQTT home/esp32/radar2/motion  ──►  Pi: _on_radar_motion
                                                ├── night (18–06)? → send_porch_relay(ON)
                                                └── motion OFF?    → 5-min timer → relay OFF
 
@@ -102,8 +102,8 @@ Pi → Firebase heartbeat (every 60 s)
 
 | Topic | Direction | QoS | Retained | Payload |
 |---|---|---|---|---|
-| `home/esp32/radar1/motion` | Device → Pi | 1 | Yes | `ON` / `OFF` |
-| `home/esp32/radar1/availability` | Device → Pi | 1 | Yes | `online` / `offline` |
+| `home/esp32/radar2/motion` | Device → Pi | 1 | Yes | `ON` / `OFF` |
+| `home/esp32/radar2/availability` | Device → Pi | 1 | Yes | `online` / `offline` |
 
 ### DHT11 sensor (on ESP32-RADAR)
 
@@ -291,7 +291,7 @@ exclusively via MQTT, with its own HTTP fallback to ESP32-RADAR handled on-devic
 - No auto-off — relay auto-off is on ESP01-LL-RLY firmware (3 min)
 
 ### ESP32-RADAR → porch light (new — 2026-05-14)
-- Trigger: `home/esp32/radar1/motion` = ON
+- Trigger: `home/esp32/radar2/motion` = ON
 - Condition: 18:00 ≤ hour < 06:00 (IST)
 - Action: `send_porch_relay(True)` via MQTT
 - On motion = OFF: 5-minute `threading.Timer` → `send_porch_relay(False)`
@@ -343,7 +343,7 @@ mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/#" -v -W 5
 mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp01/porch/#" -v -W 5
 
 # Check radar motion
-mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp32/radar1/#" -v -W 5
+mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp32/radar2/#" -v -W 5
 
 # Manually command porch relay
 mosquitto_pub -h localhost -p 1883 -u mq -P mq -t "home/esp01/porch/cmd/relay" -m "ON"
@@ -357,7 +357,7 @@ mosquitto_pub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/cmd/relay" -
 | Symptom | Cause / Fix |
 |---|---|
 | Lobby light not responding to app | Check Firebase SSE stream alive (log: `Firebase: SSE stream started for lights/living_room/state`); check MQTT bridge connected |
-| Porch light not turning on at night | Check radar MQTT arriving (`home/esp32/radar1/motion`); check night hours 18–06; check `_porch_light_on` state |
+| Porch light not turning on at night | Check radar MQTT arriving (`home/esp32/radar2/motion`); check night hours 18–06; check `_porch_light_on` state |
 | Motion video not sent to Telegram | Check camera initialized (log: `Camera initialized successfully`); check disk space |
 | Reed switch not firing | Check GPIO 26 wiring — one leg to GPIO 26, other to GND. Check log for "Reed switch initialized" |
 | MQTT bridge reconnecting constantly | Check Mosquitto running (`statusmqtt`); check credentials `mq/mq`; check `localhost:1883` |
