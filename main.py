@@ -184,6 +184,13 @@ class RaspberryPiController:
             else:
                 logger.warning("Sensor initialization partial - some sensors unavailable")
 
+            # Register reed switch door callbacks
+            self.sensors.gpio.set_reed_callbacks(
+                on_open=self._on_door_open,
+                on_close=self._on_door_close,
+            )
+            logger.info("Reed switch door callbacks: registered")
+
             # Initialize video recorder
             logger.info("Initializing video recorder...")
             self.recorder = VideoRecorder(self.config.video)
@@ -509,6 +516,22 @@ class RaspberryPiController:
             )
         except Exception as e:
             logger.warning(f'Light command execute error: {e}')
+
+    def _on_door_open(self) -> None:
+        """Called by reed switch edge interrupt when door opens."""
+        now = datetime.now().strftime('%d/%m/%y %I:%M:%S %p')
+        msg = f"Door OPENED — {now}"
+        logger.info(msg)
+        if self.telegram:
+            self.telegram.send_text(f"🚪 {msg}")
+
+    def _on_door_close(self) -> None:
+        """Called by reed switch edge interrupt when door closes."""
+        now = datetime.now().strftime('%d/%m/%y %I:%M:%S %p')
+        msg = f"Door CLOSED — {now}"
+        logger.info(msg)
+        if self.telegram:
+            self.telegram.send_text(f"🔒 {msg}")
 
     def _on_lobby_mqtt_state(self, payload: str) -> None:
         """

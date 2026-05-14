@@ -214,15 +214,17 @@ class GPIOConfig:
         mms_sensor_pin: Microwave motion sensor pin
         pir_sensor_pin: PIR motion sensor pin
         led_pin: Status LED pin
+        reed_switch_pin: Door reed switch pin (GPIO 26, other leg to GND)
     """
     mms_sensor_pin: int = 27
     pir_sensor_pin: int = 25
     led_pin: int = 18
+    reed_switch_pin: int = 26  # BCM GPIO 26, wired to GND; pull-up enabled internally
 
     def validate(self) -> bool:
         """Validate GPIO pin numbers are in valid range."""
         valid_pins = set(range(2, 28))  # BCM GPIO 2-27
-        pins = [self.mms_sensor_pin, self.pir_sensor_pin, self.led_pin]
+        pins = [self.mms_sensor_pin, self.pir_sensor_pin, self.led_pin, self.reed_switch_pin]
 
         for pin in pins:
             if pin not in valid_pins:
@@ -363,7 +365,7 @@ class AppConfig:
     last_updated: str = '30 April 2026'
 
     # Paths
-    log_file_path: str = '/home/pi/pi4_drive/Error_and_Logs/error_log.txt'
+    log_file_path: str = '/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs/error_log.txt'
     pdf_file_path: str = '/home/pi/esp32/python_raspi/Running_codes/DTH11_temperature_Humidity.pdf'
     image_file_path: str = '/home/pi/esp32/python_raspi/Running_codes/temperature_humidity_plot.png'
 
