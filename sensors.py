@@ -408,21 +408,35 @@ class GPIOSensorManager(BaseSensor):
             return False
 
     def _reed_poll_loop(self) -> None:
-        """Poll reed switch at 50 ms intervals; fire callbacks on state change."""
+        """Poll reed switch at 50 ms intervals with 300 ms debounce."""
         pin = self._config.reed_switch_pin
+        DEBOUNCE = 0.3  # seconds the new state must be held before firing
         try:
-            last = GPIO.input(pin)
+            stable = GPIO.input(pin)
         except Exception:
             return
+        candidate = stable
+        candidate_since: Optional[float] = None
         while self._initialized:
             time.sleep(0.05)
             try:
-                state = GPIO.input(pin)
+                raw = GPIO.input(pin)
             except Exception:
                 break
-            if state != last:
-                last = state
-                self._reed_on_change(state)
+            if raw == stable:
+                # Back to (or still at) confirmed state — reset candidate
+                candidate = stable
+                candidate_since = None
+            else:
+                if raw != candidate:
+                    # New candidate; start debounce timer
+                    candidate = raw
+                    candidate_since = time.monotonic()
+                elif candidate_since and (time.monotonic() - candidate_since) >= DEBOUNCE:
+                    # Held long enough — confirm and fire
+                    stable = candidate
+                    candidate_since = None
+                    self._reed_on_change(stable)
 
     def _reed_on_change(self, pin_high: int) -> None:
         """Fire the appropriate door callback when reed switch state changes."""
