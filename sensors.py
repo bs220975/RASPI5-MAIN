@@ -378,11 +378,12 @@ class GPIOSensorManager(BaseSensor):
             # Polling avoids sysfs edge-detect conflicts when the service is
             # restarted before the previous process released the GPIO.
             # pull-up HIGH = door open, LOW = door closed (switch pulls to GND).
+            reed_ok = False
             try:
                 GPIO.setup(self._config.reed_switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
                 door_state = "open" if GPIO.input(self._config.reed_switch_pin) else "closed"
                 logger.info(f"Reed switch initialized on GPIO {self._config.reed_switch_pin} — door is {door_state}")
-                threading.Thread(target=self._reed_poll_loop, daemon=True, name="reed-poll").start()
+                reed_ok = True
             except Exception as e:
                 logger.warning(f"Reed switch init failed: {e}")
 
@@ -392,8 +393,14 @@ class GPIOSensorManager(BaseSensor):
             except Exception as e:
                 logger.warning(f"LED setup failed: {e}")
 
+            # Must set _initialized=True BEFORE starting the poll thread,
+            # because the loop checks `while self._initialized`.
             self._initialized = True
             logger.info("GPIO sensors initialized")
+
+            if reed_ok:
+                threading.Thread(target=self._reed_poll_loop, daemon=True, name="reed-poll").start()
+
             return True
 
         except Exception as e:
