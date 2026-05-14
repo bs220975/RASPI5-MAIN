@@ -374,19 +374,15 @@ class GPIOSensorManager(BaseSensor):
             except Exception as e:
                 logger.warning(f"PIR sensor init failed: {e}")
 
-            # Reed switch: internal pull-up, BOTH edges via RPi.GPIO event detect.
-            # Using RPi.GPIO directly (not gpiozero) avoids mixing conflicts.
+            # Reed switch: internal pull-up, polled in a daemon thread.
+            # Polling avoids sysfs edge-detect conflicts when the service is
+            # restarted before the previous process released the GPIO.
             # pull-up HIGH = door open, LOW = door closed (switch pulls to GND).
             try:
                 GPIO.setup(self._config.reed_switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-                GPIO.add_event_detect(
-                    self._config.reed_switch_pin,
-                    GPIO.BOTH,
-                    callback=self._reed_callback,
-                    bouncetime=50
-                )
                 door_state = "open" if GPIO.input(self._config.reed_switch_pin) else "closed"
                 logger.info(f"Reed switch initialized on GPIO {self._config.reed_switch_pin} — door is {door_state}")
+                threading.Thread(target=self._reed_poll_loop, daemon=True, name="reed-poll").start()
             except Exception as e:
                 logger.warning(f"Reed switch init failed: {e}")
 
@@ -404,9 +400,25 @@ class GPIOSensorManager(BaseSensor):
             logger.error(f"GPIO initialization error: {e}")
             return False
 
-    def _reed_callback(self, channel: int) -> None:
-        """RPi.GPIO BOTH-edge callback — reads actual pin state to determine direction."""
-        pin_high = GPIO.input(channel)
+    def _reed_poll_loop(self) -> None:
+        """Poll reed switch at 50 ms intervals; fire callbacks on state change."""
+        pin = self._config.reed_switch_pin
+        try:
+            last = GPIO.input(pin)
+        except Exception:
+            return
+        while self._initialized:
+            time.sleep(0.05)
+            try:
+                state = GPIO.input(pin)
+            except Exception:
+                break
+            if state != last:
+                last = state
+                self._reed_on_change(state)
+
+    def _reed_on_change(self, pin_high: int) -> None:
+        """Fire the appropriate door callback when reed switch state changes."""
         if pin_high:
             logger.info("Reed switch: door OPENED")
             if self._on_door_open:
@@ -417,17 +429,13 @@ class GPIOSensorManager(BaseSensor):
                 threading.Thread(target=self._on_door_close, daemon=True).start()
 
     def cleanup(self) -> None:
-        """Cleanup GPIO resources."""
+        """Cleanup GPIO resources. Setting _initialized=False stops the poll loop."""
+        self._initialized = False
         if GPIO_AVAILABLE:
-            try:
-                GPIO.remove_event_detect(self._config.reed_switch_pin)
-            except Exception:
-                pass
             try:
                 GPIO.cleanup()
             except Exception as e:
                 logger.error(f"GPIO cleanup error: {e}")
-        self._initialized = False
         logger.info("GPIO cleanup complete")
 
     @property
