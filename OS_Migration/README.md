@@ -82,7 +82,7 @@ bash ~/pi4_drive/Git_projects/RASPI4-MAIN/OS_Migration/scripts/3_verify_setup.sh
 | `/home/pi/myenv/` | Python virtual environment |
 | `/home/pi/pi4_drive/` | Main working folder (synced to Google Drive) |
 | `/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/` | Main Pi4 project |
-| `/home/pi/pi4_drive/Error_and_Logs/` | Service logs |
+| `/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs/` | Service logs |
 | `~/.config/rclone/rclone.conf` | Google Drive sync config |
 
 ---
@@ -92,7 +92,7 @@ bash ~/pi4_drive/Git_projects/RASPI4-MAIN/OS_Migration/scripts/3_verify_setup.sh
 1. **AWS Certs** — Copy from USB backup if not auto-restored:
    ```bash
    cp -r /media/pi/USB/pre_reimage_*/aws_certs/ \
-     /home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/aws_certs/
+     /home/pi/pi4_drive/Git_projects/RASPI4-MAIN/aws_certs/
    ```
 
 2. **InfluxDB data** — Restore from backup:

@@ -176,7 +176,7 @@ if rclone lsd gdrive:/pi4_drive &>/dev/null 2>&1; then
     fi
 fi
 
-mkdir -p "$PI4_DRIVE_DIR"/{Git_projects,Service_files,shell_scripts,Error_and_Logs,pi4_python_projects,alias_command_file,OS_Migration}
+mkdir -p "$PI4_DRIVE_DIR/Git_projects"
 log "${GREEN}  pi4_drive folder structure ready${NC}"
 
 # ─────────────────────────────────────────────
@@ -192,11 +192,8 @@ else
     log "${GREEN}  RASPI4-MAIN up to date${NC}"
 fi
 
-PROJ_DIR="$PI4_DRIVE_DIR/pi4_python_projects/RASPI4-MAIN"
-if [ ! -d "$PROJ_DIR" ]; then
-    ln -s "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN" "$PROJ_DIR"
-    log "${GREEN}  Symlink: pi4_python_projects/RASPI4-MAIN → Git_projects/RASPI4-MAIN${NC}"
-fi
+mkdir -p "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/logs"
+log "${GREEN}  logs/ folder ready${NC}"
 
 # ─────────────────────────────────────────────
 # STEP 7 — Python virtual environment
@@ -273,7 +270,7 @@ log "${GREEN}  Mosquitto running${NC}"
 log ""
 log "${BLUE}[STEP 10/12] Installing systemd services...${NC}"
 SERVICES_SRC="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/services"
-mkdir -p "$PI4_DRIVE_DIR/Error_and_Logs"
+mkdir -p "$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/logs"
 
 if [ -d "$SERVICES_SRC" ]; then
     sudo cp "$SERVICES_SRC/mybot.service" /etc/systemd/system/
@@ -297,16 +294,14 @@ fi
 # ─────────────────────────────────────────────
 log ""
 log "${BLUE}[STEP 11/12] AWS certs...${NC}"
-CERTS_DEST="$PI4_DRIVE_DIR/pi4_python_projects/RASPI4-MAIN/aws_certs"
-CERTS_SRC="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/aws_certs"
+CERTS_DEST="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/aws_certs"
 
-if [ -d "$CERTS_SRC" ] && [ "$(ls -A $CERTS_SRC 2>/dev/null)" ]; then
-    mkdir -p "$CERTS_DEST" && cp -r "$CERTS_SRC/." "$CERTS_DEST/"
-    log "${GREEN}  AWS certs from GitHub repo${NC}"
+if [ -d "$CERTS_DEST" ] && [ "$(ls -A $CERTS_DEST 2>/dev/null)" ]; then
+    log "${GREEN}  AWS certs already in repo${NC}"
 elif [ -n "$GDRIVE_BACKUP_DIR" ]; then
     mkdir -p "$CERTS_DEST"
     rclone copy "gdrive:/pi4_backups/${GDRIVE_BACKUP_DIR}/aws_certs" "$CERTS_DEST" 2>/dev/null && \
-        log "${GREEN}  AWS certs from Drive backup${NC}" || true
+        log "${GREEN}  AWS certs restored from Drive backup${NC}" || true
 fi
 
 if [ -z "$(ls -A $CERTS_DEST 2>/dev/null)" ]; then
@@ -325,8 +320,8 @@ ALIASES_BACKUP="$PI4_DRIVE_DIR/Git_projects/RASPI4-MAIN/OS_Migration/configs/.ba
 [ -f "$BASHRC_BACKUP" ]  && cp "$BASHRC_BACKUP"  /home/pi/.bashrc       && log "${GREEN}  .bashrc restored${NC}"
 [ -f "$ALIASES_BACKUP" ] && cp "$ALIASES_BACKUP" /home/pi/.bash_aliases  && log "${GREEN}  .bash_aliases restored${NC}"
 
-grep -q "pi4_drive/shell_scripts" /home/pi/.bashrc || \
-    echo 'export PATH="$PATH:/home/pi/pi4_drive/shell_scripts"' >> /home/pi/.bashrc
+grep -q "Git_projects/RASPI4-MAIN/shell_scripts" /home/pi/.bashrc || \
+    echo 'export PATH="$PATH:/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/shell_scripts"' >> /home/pi/.bashrc
 
 # ─────────────────────────────────────────────
 # Done

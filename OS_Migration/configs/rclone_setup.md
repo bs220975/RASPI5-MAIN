@@ -28,7 +28,7 @@ rclone ls gdrive:/pi4_drive/
 
 ## Sync (using existing sync.sh)
 ```bash
-bash /home/pi/pi4_drive/shell_scripts/sync.sh
+bash /home/pi/pi4_drive/Git_projects/RASPI4-MAIN/shell_scripts/sync.sh
 ```
 
 ## Restore from Google Drive (first sync after reimage)

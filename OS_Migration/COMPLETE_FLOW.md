@@ -21,7 +21,7 @@ Run backup script   ──────►  gdrive:/pi4_backups/    ──►  Po
 
 ### Step A — Run Backup Script
 ```bash
-bash /home/pi/pi4_drive/OS_Migration/scripts/1_backup_before_reimage.sh
+bash /home/pi/pi4_drive/Git_projects/RASPI4-MAIN/OS_Migration/scripts/1_backup_before_reimage.sh
 ```
 
 **What it backs up:**
@@ -110,7 +110,7 @@ Expected output:
   [PASS] mybot running
   [PASS] mqttdatainflux enabled
   [PASS] mqttdatainflux running
-  [PASS] Error_and_Logs folder exists
+  [PASS] logs folder exists
   [PASS] mybot script exists
   [PASS] influx script exists
 
@@ -178,10 +178,10 @@ source ~/.bashrc
 | `/home/pi/myenv/` | Python virtual environment |
 | `/home/pi/pi4_drive/` | Main working folder (synced to Google Drive) |
 | `/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/` | Main Pi4 project (GitHub) |
-| `/home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/` | Symlink → Git_projects/RASPI4-MAIN |
-| `/home/pi/pi4_drive/Service_files/` | Service file backups |
-| `/home/pi/pi4_drive/Error_and_Logs/` | Service logs |
-| `/home/pi/pi4_drive/shell_scripts/` | sync.sh, backup.sh etc. |
+| `/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs/` | Service logs |
+| `/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/shell_scripts/` | sync.sh, backup.sh |
+| `/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/OS_Migration/services/` | Service file backups |
+| `/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/alias_command_file/` | .bash_aliases backup |
 | `~/.config/rclone/rclone.conf` | Google Drive auth config |
 
 ---
@@ -205,9 +205,8 @@ gdrive:/
 │   │       ├── apt_packages.txt
 │   │       ├── .bash_aliases
 │   │       └── bashrc.txt
-│   ├── Service_files/
-│   ├── shell_scripts/
-│   └── ...
+│   └── Git_projects/
+│       └── RASPI4-MAIN/           ← All project files (code, scripts, logs, services)
 │
 └── pi4_backups/                      ← Pre-reimage snapshots
     └── pre_reimage_2026-05-11_09-30/
@@ -233,16 +232,22 @@ gdrive:/
 
 ```
 RASPI4-MAIN/
-├── OS_Migration/             ← Migration scripts (this folder)
-│   ├── COMPLETE_FLOW.md      ← This document
-│   ├── README.md
-│   ├── scripts/
-│   ├── services/
-│   └── configs/
-├── main.py                   ← mybot entry point
+├── main.py                        ← mybot entry point
 ├── config.py
-├── aws_certs/                ← AWS IoT certificates
-└── requirements.txt
+├── aws_certs/                     ← AWS IoT certificates
+├── requirements.txt
+├── influx_aws_publish/            ← InfluxDB + AWS publisher
+├── logs/                          ← Service logs (mybot, mqttdatainflux)
+├── shell_scripts/                 ← backup.sh, sync.sh
+├── alias_command_file/            ← .bash_aliases backup
+├── not_using/                     ← Archived old code
+└── OS_Migration/                  ← Migration scripts and project reference
+    ├── PROJECT_REFERENCE.md       ← Architecture + project log (revision history here)
+    ├── COMPLETE_FLOW.md           ← OS migration step-by-step
+    ├── README.md
+    ├── scripts/
+    ├── services/
+    └── configs/
 ```
 
 ---

@@ -7,10 +7,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN
+WorkingDirectory=/home/pi/pi4_drive/Git_projects/RASPI4-MAIN
 
 # Activate venv and run the script
-ExecStart=/bin/bash -c 'source /home/pi/myenv/bin/activate && exec python /home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/main.py'
+ExecStart=/bin/bash -c 'source /home/pi/myenv/bin/activate && exec python /home/pi/pi4_drive/Git_projects/RASPI4-MAIN/main.py'
 
 # Environment variables
 Environment="PYTHONUNBUFFERED=1"
@@ -20,8 +20,8 @@ Environment="XAUTHORITY=/home/pi/.Xauthority"
 
 # Logging: Python logging writes to stdout; telepot network timeout noise goes to stderr.
 # Capture structured Python logs to the output file; suppress the raw telepot stderr flood.
-StandardOutput=append:/home/pi/pi4_drive/Error_and_Logs/Output_mybot_service.log
-StandardError=append:/home/pi/pi4_drive/Error_and_Logs/Error_mybot_service.log
+StandardOutput=append:/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs/Output_mybot_service.log
+StandardError=append:/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs/Error_mybot_service.log
 
 # Restart policy — restart on any exit (crash, OOM, signal, etc.)
 Restart=always

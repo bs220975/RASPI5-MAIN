@@ -54,10 +54,10 @@ check "mybot running"                "systemctl is-active --quiet mybot.service"
 check "mqttdatainflux enabled"       "systemctl is-enabled --quiet mqttdatainflux.service"
 check "mqttdatainflux running"       "systemctl is-active --quiet mqttdatainflux.service"
 # Log folder
-check "Error_and_Logs folder exists" "[ -d /home/pi/pi4_drive/Error_and_Logs ]"
+check "logs folder exists"           "[ -d /home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs ]"
 # Script paths the services depend on
-check "mybot script exists"          "[ -f /home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/main.py ]"
-check "influx script exists"         "[ -f /home/pi/pi4_drive/pi4_python_projects/influx_aws_publish/influxdb2_aws_publish.py ]"
+check "mybot script exists"          "[ -f /home/pi/pi4_drive/Git_projects/RASPI4-MAIN/main.py ]"
+check "influx script exists"         "[ -f /home/pi/pi4_drive/Git_projects/RASPI4-MAIN/influx_aws_publish/influxdb2_aws_publish.py ]"
 echo ""
 
 # Python
@@ -90,7 +90,7 @@ echo ""
 
 # AWS certs
 echo -e "${CYAN}--- AWS Certs ---${NC}"
-CERT_DIR="/home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/aws_certs"
+CERT_DIR="/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/aws_certs"
 check "aws_certs dir exists"    "[ -d '$CERT_DIR' ]"
 check "cert .pem file exists"   "ls '$CERT_DIR'/*.pem &>/dev/null"
 echo ""

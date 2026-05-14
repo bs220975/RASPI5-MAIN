@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 ExecStartPre=/bin/sleep 5
 # Activate venv and run the script (adjust the path if necessary)
-ExecStart=/bin/bash -c 'source /home/pi/myenv/bin/activate && exec python /home/pi/pi4_drive/pi4_python_projects/influx_aws_publish/influxdb2_aws_publish.py'
+ExecStart=/bin/bash -c 'source /home/pi/myenv/bin/activate && exec python /home/pi/pi4_drive/Git_projects/RASPI4-MAIN/influx_aws_publish/influxdb2_aws_publish.py'
 
 # Set environment variables (if needed)
 Environment="PYTHONUNBUFFERED=1"
@@ -16,8 +16,8 @@ Environment="DISPLAY=:0"  # Needed if script uses GUI (optional)
 Environment="XAUTHORITY=/home/pi/.Xauthority"  # Needed for GUI apps (optional)
 
 # Logging
-#StandardOutput=append:/home/pi/pi4_drive/Error_and_Logs/Output_influxdb_aws_publish.log
-StandardError=append:/home/pi/pi4_drive/Error_and_Logs/Error_influxdb_aws_publish.log
+#StandardOutput=append:/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs/Output_influxdb_aws_publish.log
+StandardError=append:/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs/Error_influxdb_aws_publish.log
 
 # Restart policy
 Restart=on-failure

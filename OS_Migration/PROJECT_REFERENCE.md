@@ -1,4 +1,13 @@
-# Raspberry Pi MQTT + Firebase Bridge Architecture
+# Raspberry Pi MQTT + Firebase Bridge — Project Reference
+
+## Revision History
+
+| Date | Session | Changes |
+|---|---|---|
+| 2026-05-13 | Session 2 | Phase 1 Firebase SSE streaming implemented. Phase 2 MQTT bridge implemented. ESP01-LL-RLY MQTT firmware verified live. Both repos pushed to GitHub. |
+| 2026-05-14 | Session 3 | Full project folder reorganisation — all files consolidated inside `RASPI4-MAIN/`. Shell scripts rewritten (`backup.sh` → rsync with progress; `sync.sh` → fixed stderr capture and rclone v1.60 grep). Broken aliases fixed and updated. `logs/` folder created (moved from `pi4_drive/Error_and_Logs/`). `influx_aws_publish/` moved into `RASPI4-MAIN/`. Service files updated with correct paths. `ace_design_projects/RASPI4-MAIN` archived as `RASPI4-MAIN_OLD_BACKUP`. This file renamed from `ARCHITECTURE_MQTT_FIREBASE_BRIDGE.md` to `PROJECT_REFERENCE.md`. |
+
+---
 
 ## Quick Navigation
 
