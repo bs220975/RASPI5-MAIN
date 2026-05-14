@@ -229,9 +229,9 @@ class RaspberryPiController:
                     'living_room', self._on_firebase_light_cmd
                 )
                 self.firebase.start_command_stream(
-                    'lobby2', self._on_firebase_porch_light_cmd
+                    'lobby', self._on_firebase_porch_light_cmd
                 )
-                logger.info("Firebase light command streams: started (living_room + lobby2)")
+                logger.info("Firebase light command streams: started (living_room + lobby)")
             else:
                 logger.warning("Firebase connection failed - live status disabled")
 
@@ -583,7 +583,7 @@ class RaspberryPiController:
                 self.firebase.push_porch_relay_status(
                     reachable=True, relay_on=relay_on
                 )
-                self.firebase.set_light_confirmed('lobby2', relay_on)
+                self.firebase.set_light_confirmed('lobby', relay_on)
         threading.Thread(target=_update, daemon=True).start()
 
     def _on_radar_motion(self, payload: str) -> None:
