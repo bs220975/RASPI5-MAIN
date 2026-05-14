@@ -11,7 +11,8 @@
 |---|---|
 | 2026-05-13 | Phase 1 Firebase SSE streaming implemented. Phase 2 MQTT bridge implemented. ESP01-LL-RLY MQTT firmware verified live. Both repos pushed to GitHub. |
 | 2026-05-14 | Full project folder reorganisation — all files consolidated inside `RASPI4-MAIN/`. Shell scripts rewritten (`backup.sh` → rsync with progress; `sync.sh` → fixed stderr capture and rclone v1.60 grep). Broken aliases fixed. `logs/` created; `influx_aws_publish/` moved in. Service files updated with correct paths. File renamed from `ARCHITECTURE_MQTT_FIREBASE_BRIDGE.md` to `PROJECT_REFERENCE.md`. README.md, COMPLETE_FLOW.md, and rclone_setup.md merged into this file. |
-| 2026-05-14 | Reed switch door sensor added on GPIO 26. Edge-triggered callbacks in `sensors.py`. Telegram alerts on door open/close. Log path in `config.py` corrected. |
+| 2026-05-14 | Reed switch door sensor added on GPIO 26. Telegram alerts on door open/close. Log path in `config.py` corrected. |
+| 2026-05-14 | Reed switch fixed: replaced gpiozero edge detection with 50ms polling thread + 300ms software debounce. Three bugs resolved: gpiozero/RPi.GPIO conflict, stale sysfs on service restart, poll thread starting before `_initialized=True`. |
 
 ---
 
@@ -388,8 +389,9 @@ gdrive:/
 | Drive sync fails | Run `rclone config` to re-authenticate |
 | InfluxDB not found | `which influx` — if missing, re-run Step 7 manually |
 | 32-bit OS flashed by mistake | `getconf LONG_BIT` → should return `64` |
-| Reed switch no alerts | Check GPIO 26 wiring; one leg to GPIO 26, other to GND |
-| Door alert fires on startup | Normal — `when_deactivated` fires once on init if door is open |
+| Reed switch no alerts | Check GPIO 26 wiring (one leg GPIO 26, other to GND). Check `logs/Output_mybot_service.log` for "Reed switch initialized" — if missing, wiring or GPIO conflict |
+| Reed switch fires continuously | Magnet too far from switch — reposition magnet closer. 300ms debounce is in place but won't help if pin is genuinely oscillating |
+| Reed switch init fails on restart | Expected if previous process was killed before cleanup. Fixed by polling thread — no sysfs dependency. If still failing check for gpiozero conflict on the pin |
 
 ---
 
@@ -643,11 +645,19 @@ Symptom of bootstrap running: device pings, port 80 closed, port 8266 open, no M
 #### Reed switch door sensor (2026-05-14)
 
 - [x] `config.py` — `reed_switch_pin = 26` added to `GPIOConfig`; log path fixed
-- [x] `sensors.py` — reed switch initialised with `pull_up=True`, 50ms debounce
-  - Edge-triggered: `when_deactivated` → door open, `when_activated` → door closed
-  - `set_reed_callbacks(on_open, on_close)` added
+- [x] `sensors.py` — reed switch on GPIO 26 with internal pull-up
+  - `GPIO.setup(26, GPIO.IN, pull_up_down=GPIO.PUD_UP)` — HIGH = door open, LOW = door closed
+  - Daemon thread `_reed_poll_loop` polls `GPIO.input(pin)` every 50ms
+  - 300ms software debounce — new state must be held stable before callback fires
+  - `set_reed_callbacks(on_open, on_close)` — called from `main.py` after init
   - `SensorState` updated with `door_open` field
 - [x] `main.py` — `_on_door_open` / `_on_door_close` send timestamped Telegram alerts
+- [x] **Verified working** — open and close events both fire correctly
+
+**Why polling instead of `GPIO.add_event_detect`:** Three bugs made edge detection unreliable on this Pi:
+1. `gpiozero.DigitalInputDevice` (used for MMS/PIR) conflicts with `RPi.GPIO` edge detection — fires only once
+2. `GPIO.add_event_detect` fails on service restart if the previous process was SIGTERM'd before `GPIO.cleanup()` ran (stale `/sys/class/gpio` state)
+3. Poll thread must start *after* `self._initialized = True` — if started before, `while self._initialized` exits immediately
 
 #### GitHub — repos pushed
 
@@ -716,9 +726,9 @@ Then toggle the Living Room switch in the Android app and confirm:
 4. Pi writes `lights/living_room/confirmed` to Firebase
 5. Android app shows confirmed state
 
-**Step 3 — Test reed switch**
-- Open and close the door
-- Confirm Telegram receives `🚪 Door OPENED` and `🔒 Door CLOSED` with timestamps
+**Step 3 — Reed switch** ✅ Verified working (2026-05-14)
+- Polling thread with 300ms debounce confirmed reliable across service restarts
+- Telegram receives `🚪 Door OPENED` and `🔒 Door CLOSED` with timestamps
 
 **Step 4 — Fix DHT11_ESP32 auth failure**
 - Device `DHT11_ESP32-10B37A-V1` at `192.168.1.87` fails Mosquitto auth every 5 minutes
