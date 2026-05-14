@@ -577,7 +577,7 @@ class RaspberryPiController:
         if not self.recorder.is_recording:
             self._recording_start_time = current_time
             filename = time.strftime("%d%b%y_%H%M%S")
-            self.recorder.start_recording(filename, max_duration=120)
+            self.recorder.start_recording(filename)
             logger.info(f"Recording started: {filename}")
         else:
             self.recorder.extend_recording()
@@ -597,7 +597,7 @@ class RaspberryPiController:
         max_dur = self.config.video.max_duration
 
         should_stop = (
-            (time_since_motion > 5 and total_duration >= min_dur) or
+            (time_since_motion > self.config.video.motion_timeout and total_duration >= min_dur) or
             total_duration >= max_dur
         )
 

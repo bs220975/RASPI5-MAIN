@@ -254,8 +254,8 @@ class VideoConfig:
     video_dir: str = '/home/pi/raspi_camera_videos'
     min_duration: int = 10
     max_duration: int = 120
-    motion_timeout: int = 5
-    bitrate: int = 2_000_000
+    motion_timeout: int = 10
+    bitrate: int = 1_000_000
     disk_usage_threshold: float = 75.0
 
     def __post_init__(self):

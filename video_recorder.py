@@ -282,7 +282,9 @@ class VideoRecorder:
         """Convert H264 to MP4 using ffmpeg"""
         try:
             result = subprocess.run(
-                ["ffmpeg", "-y", "-i", h264_file, "-c", "copy", mp4_file],
+                ["ffmpeg", "-y", "-i", h264_file,
+                 "-c:v", "libx264", "-crf", "26", "-preset", "fast",
+                 "-c:a", "copy", mp4_file],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 timeout=60
