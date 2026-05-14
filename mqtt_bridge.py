@@ -1,14 +1,22 @@
 """
 MQTT bridge between local Mosquitto and the Pi home automation system.
 
-Phase 2 of the MQTT + Firebase bridge migration.  Handles the ESP01 Lobby
-relay as the first MQTT-native device.  HTTP fallback in main.py remains
-active until the ESP01 firmware is updated.
+Manages three MQTT-native devices:
+  ESP01-LL-RLY  (lobby relay,  192.168.1.85)  — lobby light
+  ESP01-RELAY   (porch relay,  192.168.1.111) — porch / entrance light
+  ESP32-RADAR   (radar sensor, 192.168.1.87)  — motion detection
 
 Topics managed:
-    home/esp01/lobby/cmd/relay   — Pi publishes ON / OFF commands  (QoS 1)
-    home/esp01/lobby/state       — ESP publishes relay state        (QoS 1)
-    home/esp01/lobby/availability — ESP publishes online / offline  (QoS 1)
+    home/esp01/lobby/cmd/relay    Pi → ESP01-LL-RLY:  ON / OFF  (QoS 1)
+    home/esp01/lobby/state        ESP01-LL-RLY → Pi:  ON / OFF
+    home/esp01/lobby/availability ESP01-LL-RLY → Pi:  online / offline
+
+    home/esp01/porch/cmd/relay    Pi → ESP01-RELAY:   ON / OFF  (QoS 1)
+    home/esp01/porch/state        ESP01-RELAY → Pi:   ON / OFF
+    home/esp01/porch/availability ESP01-RELAY → Pi:   online / offline
+
+    home/esp32/radar1/motion      ESP32-RADAR → Pi:   ON / OFF
+    home/esp32/radar1/availability ESP32-RADAR → Pi:  online / offline
 """
 import logging
 from typing import Callable, Optional
@@ -22,25 +30,38 @@ except ImportError:
     mqtt = None  # type: ignore
     _PAHO_AVAILABLE = False
 
+# ── Lobby relay (ESP01-LL-RLY at 192.168.1.85) ─────────────────────────────
 _LOBBY_CMD_TOPIC   = 'home/esp01/lobby/cmd/relay'
 _LOBBY_STATE_TOPIC = 'home/esp01/lobby/state'
 _LOBBY_AVAIL_TOPIC = 'home/esp01/lobby/availability'
+
+# ── Porch relay (ESP01-RELAY at 192.168.1.111) ──────────────────────────────
+_PORCH_CMD_TOPIC   = 'home/esp01/porch/cmd/relay'
+_PORCH_STATE_TOPIC = 'home/esp01/porch/state'
+_PORCH_AVAIL_TOPIC = 'home/esp01/porch/availability'
+
+# ── Radar sensor (ESP32-RADAR at 192.168.1.87) ──────────────────────────────
+_RADAR_MOTION_TOPIC = 'home/esp32/radar1/motion'
+_RADAR_AVAIL_TOPIC  = 'home/esp32/radar1/availability'
 
 
 class MqttBridge:
     """
     Manages the Pi's MQTT client session against local Mosquitto.
 
-    Subscribes to ESP01 Lobby state and availability topics.
-    Publishes relay commands.  Designed to coexist with the HTTP fallback
-    path during the firmware migration period.
+    Subscribes to ESP device state and availability topics.
+    Publishes relay commands to lobby and porch devices.
 
     Usage:
-        bridge = MqttBridge(config.mqtt,
-                            on_lobby_state=...,
-                            on_lobby_availability=...)
+        bridge = MqttBridge(
+            config.mqtt,
+            on_lobby_state=...,
+            on_porch_state=...,
+            on_radar_motion=...,
+        )
         bridge.start()
         bridge.send_lobby_relay(True)
+        bridge.send_porch_relay(True)
         bridge.stop()
     """
 
@@ -49,13 +70,22 @@ class MqttBridge:
         config,
         on_lobby_state: Optional[Callable[[str], None]] = None,
         on_lobby_availability: Optional[Callable[[bool], None]] = None,
+        on_porch_state: Optional[Callable[[str], None]] = None,
+        on_porch_availability: Optional[Callable[[bool], None]] = None,
+        on_radar_motion: Optional[Callable[[str], None]] = None,
+        on_radar_availability: Optional[Callable[[bool], None]] = None,
     ) -> None:
         self._config = config
-        self._on_lobby_state = on_lobby_state
+        self._on_lobby_state        = on_lobby_state
         self._on_lobby_availability = on_lobby_availability
+        self._on_porch_state        = on_porch_state
+        self._on_porch_availability = on_porch_availability
+        self._on_radar_motion       = on_radar_motion
+        self._on_radar_availability = on_radar_availability
         self._client: Optional[object] = None
         self._connected = False
         self._lobby_available = False
+        self._porch_available = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -105,27 +135,35 @@ class MqttBridge:
 
     @property
     def lobby_available(self) -> bool:
-        """True if the ESP01 Lobby last published 'online' on its availability topic."""
+        """True if ESP01-LL-RLY last published 'online'."""
         return self._lobby_available
 
-    def send_lobby_relay(self, state: bool) -> bool:
-        """
-        Publish ON or OFF to the lobby relay command topic (QoS 1).
+    @property
+    def porch_available(self) -> bool:
+        """True if ESP01-RELAY last published 'online'."""
+        return self._porch_available
 
-        Returns True if the message was accepted by paho, False otherwise.
-        Callers should fall back to HTTP when this returns False.
-        """
+    def send_lobby_relay(self, state: bool) -> bool:
+        """Publish ON or OFF to the lobby relay command topic (QoS 1)."""
+        return self._publish(_LOBBY_CMD_TOPIC, 'ON' if state else 'OFF')
+
+    def send_porch_relay(self, state: bool) -> bool:
+        """Publish ON or OFF to the porch relay command topic (QoS 1)."""
+        return self._publish(_PORCH_CMD_TOPIC, 'ON' if state else 'OFF')
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _publish(self, topic: str, payload: str) -> bool:
         if not self._connected or self._client is None:
             return False
-        payload = 'ON' if state else 'OFF'
-        result = self._client.publish(
-            _LOBBY_CMD_TOPIC, payload, qos=1, retain=False
-        )
+        result = self._client.publish(topic, payload, qos=1, retain=False)
         ok = result.rc == mqtt.MQTT_ERR_SUCCESS
         if ok:
-            logger.info(f"MQTT: published {payload} -> {_LOBBY_CMD_TOPIC}")
+            logger.info(f"MQTT: published {payload} -> {topic}")
         else:
-            logger.warning(f"MQTT: publish failed rc={result.rc}")
+            logger.warning(f"MQTT: publish failed rc={result.rc} topic={topic}")
         return ok
 
     # ------------------------------------------------------------------
@@ -137,16 +175,21 @@ class MqttBridge:
             self._connected = True
             logger.info("MQTT bridge: connected to broker")
             client.subscribe([
-                (_LOBBY_STATE_TOPIC, 1),
-                (_LOBBY_AVAIL_TOPIC, 1),
+                (_LOBBY_STATE_TOPIC,  1),
+                (_LOBBY_AVAIL_TOPIC,  1),
+                (_PORCH_STATE_TOPIC,  1),
+                (_PORCH_AVAIL_TOPIC,  1),
+                (_RADAR_MOTION_TOPIC, 1),
+                (_RADAR_AVAIL_TOPIC,  1),
             ])
-            logger.info("MQTT bridge: subscribed to lobby topics")
+            logger.info("MQTT bridge: subscribed to all device topics")
         else:
             logger.error(f"MQTT bridge: connection refused rc={rc}")
 
     def _on_disconnect(self, client, userdata, rc) -> None:
         self._connected = False
         self._lobby_available = False
+        self._porch_available = False
         if rc != 0:
             logger.warning(
                 f"MQTT bridge: unexpected disconnect rc={rc} — "
@@ -157,6 +200,7 @@ class MqttBridge:
         topic   = msg.topic
         payload = msg.payload.decode('utf-8', errors='replace').strip()
 
+        # ── Lobby relay ──────────────────────────────────────────────────
         if topic == _LOBBY_AVAIL_TOPIC:
             available = payload.lower() == 'online'
             self._lobby_available = available
@@ -168,3 +212,28 @@ class MqttBridge:
             logger.info(f"MQTT: lobby state = {payload}")
             if self._on_lobby_state:
                 self._on_lobby_state(payload)
+
+        # ── Porch relay ──────────────────────────────────────────────────
+        elif topic == _PORCH_AVAIL_TOPIC:
+            available = payload.lower() == 'online'
+            self._porch_available = available
+            logger.info(f"MQTT: porch availability = {payload}")
+            if self._on_porch_availability:
+                self._on_porch_availability(available)
+
+        elif topic == _PORCH_STATE_TOPIC:
+            logger.info(f"MQTT: porch state = {payload}")
+            if self._on_porch_state:
+                self._on_porch_state(payload)
+
+        # ── Radar motion ─────────────────────────────────────────────────
+        elif topic == _RADAR_AVAIL_TOPIC:
+            available = payload.lower() == 'online'
+            logger.info(f"MQTT: radar availability = {payload}")
+            if self._on_radar_availability:
+                self._on_radar_availability(available)
+
+        elif topic == _RADAR_MOTION_TOPIC:
+            logger.info(f"MQTT: radar motion = {payload}")
+            if self._on_radar_motion:
+                self._on_radar_motion(payload)

@@ -4,13 +4,13 @@ Firebase Realtime Database Logger for Raspberry Pi Home Automation System
 Writes live status to the existing Firebase schema (no auth required —
 database rules allow public read/write on these nodes):
 
-    /devices/RASPI-4/   — Pi heartbeat (lastSeen, reachable, cpuTemp, …)
-    /devices/esp01_relay/ — Relay status (lastSeen, reachable, relayState)
-    /lights/live/         — Live motion & light state for the Android app
+    /devices/RASPI-4/     — Pi heartbeat (lastSeen, reachable, cpuTemp, …)
+    /devices/ESP01-LL-RLY/ — Lobby relay status (192.168.1.85)
+    /devices/esp01_relay/  — Porch relay status (192.168.1.111)
+    /lights/live/          — Live motion & light state for the Android app
 
-Phase 1 addition: start_command_stream() replaces the 1-second REST poll
-with a Firebase RTDB SSE (Server-Sent Events) stream that delivers changes
-in near-real time with a fraction of the read traffic.
+start_command_stream() subscribes to a Firebase RTDB SSE stream for any
+light node.  Multiple streams can run simultaneously (keyed by light_id).
 """
 import json
 import logging
@@ -72,8 +72,8 @@ class FirebaseLogger:
     def __init__(self, config) -> None:
         self._db_url = config.database_url.rstrip('/')
         self._timeout = config.request_timeout
-        self._stream_stop: Optional[threading.Event] = None
-        self._stream_thread: Optional[threading.Thread] = None
+        # Multiple SSE streams, keyed by light_id
+        self._streams: dict = {}  # light_id -> (thread, stop_event)
 
     # ------------------------------------------------------------------
     # Public interface
@@ -123,6 +123,24 @@ class FirebaseLogger:
         })
 
         return ok
+
+    def push_porch_relay_status(
+        self,
+        reachable: bool,
+        relay_on: bool,
+    ) -> bool:
+        """
+        Update /devices/esp01_relay/ with the porch relay (192.168.1.111) status.
+
+        Written by Pi when it receives ESP01-RELAY state via MQTT — replaces the
+        heartbeat that ESP32-RADAR previously sent via checkESP01Health().
+        """
+        data: Dict[str, Any] = {
+            'lastSeen':   _ms_now(),
+            'reachable':  reachable,
+            'relayState': relay_on,
+        }
+        return self._patch('devices/esp01_relay', data)
 
     def push_lobby_relay_status(
         self,
@@ -189,19 +207,20 @@ class FirebaseLogger:
         """
         Start a background SSE listener on lights/{light_id}/state.
 
-        Calls callback(bool) immediately when the value changes.  The stream
-        reconnects automatically on network errors.  Replaces the 1-second
-        REST polling loop that was previously used for light commands.
+        Calls callback(bool) when the value changes.  The stream reconnects
+        automatically on network errors.  Multiple streams can run in parallel
+        (e.g. 'living_room' and 'lobby2').  A second call with the same
+        light_id is a no-op if that stream is already alive.
 
         Args:
-            light_id: Firebase light key, e.g. 'living_room'
+            light_id: Firebase light key, e.g. 'living_room' or 'lobby2'
             callback: Called with True (ON) or False (OFF) on each change
         """
-        if self._stream_thread and self._stream_thread.is_alive():
+        existing = self._streams.get(light_id)
+        if existing and existing[0].is_alive():
             return
 
-        self._stream_stop = threading.Event()
-        stop = self._stream_stop
+        stop = threading.Event()
 
         def _loop() -> None:
             url     = self._url(f'lights/{light_id}/state')
@@ -212,12 +231,9 @@ class FirebaseLogger:
                         url,
                         headers=headers,
                         stream=True,
-                        timeout=(10, None),  # (connect_timeout, no_read_timeout)
+                        timeout=(10, None),
                     ) as resp:
                         event_type: Optional[str] = None
-                        # chunk_size=1 eliminates the default 512-byte read
-                        # buffer so each SSE line is yielded the instant it
-                        # arrives — no event batching delay.
                         for line in resp.iter_lines(chunk_size=1,
                                                     decode_unicode=True):
                             if stop.is_set():
@@ -243,16 +259,18 @@ class FirebaseLogger:
                         )
                         stop.wait(5)
 
-        self._stream_thread = threading.Thread(
-            target=_loop, name='FirebaseStream', daemon=True
+        thread = threading.Thread(
+            target=_loop, name=f'FirebaseStream-{light_id}', daemon=True
         )
-        self._stream_thread.start()
+        self._streams[light_id] = (thread, stop)
+        thread.start()
         logger.info(f'Firebase: SSE stream started for lights/{light_id}/state')
 
     def stop_command_stream(self) -> None:
-        """Signal the SSE background thread to stop."""
-        if self._stream_stop:
-            self._stream_stop.set()
+        """Signal all SSE background streams to stop."""
+        for _thread, stop in self._streams.values():
+            stop.set()
+        self._streams.clear()
 
     # ------------------------------------------------------------------
     # Internal helpers

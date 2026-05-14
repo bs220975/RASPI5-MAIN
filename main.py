@@ -109,6 +109,12 @@ class RaspberryPiController:
         # Debounce timer — cancelled/reset on each rapid incoming command
         self._light_cmd_timer: Optional[threading.Timer] = None
 
+        # Porch relay state (managed by MQTT radar motion + Firebase lobby2 stream)
+        self._porch_light_on: bool = False
+        self._porch_light_off_timer: Optional[threading.Timer] = None
+        self._last_porch_cmd: Optional[bool] = None
+        self._porch_cmd_timer: Optional[threading.Timer] = None
+
         # Setup logging
         self._setup_logging()
 
@@ -222,7 +228,10 @@ class RaspberryPiController:
                 self.firebase.start_command_stream(
                     'living_room', self._on_firebase_light_cmd
                 )
-                logger.info("Firebase light command stream: started")
+                self.firebase.start_command_stream(
+                    'lobby2', self._on_firebase_porch_light_cmd
+                )
+                logger.info("Firebase light command streams: started (living_room + lobby2)")
             else:
                 logger.warning("Firebase connection failed - live status disabled")
 
@@ -231,6 +240,8 @@ class RaspberryPiController:
             self.mqtt_bridge = MqttBridge(
                 self.config.mqtt,
                 on_lobby_state=self._on_lobby_mqtt_state,
+                on_porch_state=self._on_porch_mqtt_state,
+                on_radar_motion=self._on_radar_motion,
             )
             if self.mqtt_bridge.start():
                 logger.info("MQTT bridge: started")
@@ -555,6 +566,94 @@ class RaspberryPiController:
                 )
                 self.firebase.set_light_confirmed('living_room', relay_on)
         threading.Thread(target=_update, daemon=True).start()
+
+    def _on_porch_mqtt_state(self, payload: str) -> None:
+        """
+        Handle an ESP01-RELAY (porch relay) state message arriving over MQTT.
+
+        Updates /devices/esp01_relay and lights/lobby2/confirmed so the
+        Android app reflects the actual physical relay state.
+        """
+        relay_on = payload.upper() == 'ON'
+        self._porch_light_on = relay_on
+        logger.info(f'Porch relay state via MQTT: {"ON" if relay_on else "OFF"}')
+
+        def _update() -> None:
+            if self.firebase:
+                self.firebase.push_porch_relay_status(
+                    reachable=True, relay_on=relay_on
+                )
+                self.firebase.set_light_confirmed('lobby2', relay_on)
+        threading.Thread(target=_update, daemon=True).start()
+
+    def _on_radar_motion(self, payload: str) -> None:
+        """
+        Handle a radar motion event from ESP32-RADAR via MQTT.
+
+        During night hours (18:00–06:00) a motion=ON event turns on the
+        porch relay.  A motion=OFF event starts a 5-minute countdown; if no
+        further ON arrives within that window the relay is turned off.
+        """
+        motion_on = payload.upper() == 'ON'
+        current_hour = datetime.now().hour
+        is_night = (current_hour >= 18) or (current_hour < 6)
+
+        if motion_on:
+            # Cancel any pending off timer
+            if self._porch_light_off_timer is not None:
+                self._porch_light_off_timer.cancel()
+                self._porch_light_off_timer = None
+
+            if is_night and self.mqtt_bridge:
+                logger.info('Radar motion ON (night) → porch relay ON')
+                self.mqtt_bridge.send_porch_relay(True)
+        else:
+            # Motion stopped — schedule light off after 5 minutes
+            if self._porch_light_on:
+                logger.info('Radar motion OFF → porch light off in 5 min')
+
+                def _turn_off() -> None:
+                    if self.mqtt_bridge:
+                        logger.info('Porch light off timer fired')
+                        self.mqtt_bridge.send_porch_relay(False)
+                    self._porch_light_off_timer = None
+
+                self._porch_light_off_timer = threading.Timer(300.0, _turn_off)
+                self._porch_light_off_timer.daemon = True
+                self._porch_light_off_timer.start()
+
+    def _on_firebase_porch_light_cmd(self, cmd: bool) -> None:
+        """
+        Handle a porch light command from the Firebase SSE stream (lights/lobby2/state).
+
+        Debounces rapid bursts, then sends the final command to ESP01-RELAY via MQTT.
+        """
+        logger.info(f'Firebase stream: porch light {"ON" if cmd else "OFF"}')
+
+        if self._porch_cmd_timer is not None:
+            self._porch_cmd_timer.cancel()
+
+        self._porch_cmd_timer = threading.Timer(
+            0.4, self._execute_porch_cmd, args=(cmd,)
+        )
+        self._porch_cmd_timer.daemon = True
+        self._porch_cmd_timer.start()
+
+    def _execute_porch_cmd(self, cmd: bool) -> None:
+        """Execute the debounced porch relay command."""
+        if cmd == self._last_porch_cmd:
+            logger.debug(f'Porch cmd {"ON" if cmd else "OFF"} skipped — same as last')
+            return
+        self._last_porch_cmd = cmd
+        logger.info(f'Executing porch command: {"ON" if cmd else "OFF"}')
+
+        try:
+            if self.mqtt_bridge and self.mqtt_bridge.is_connected:
+                self.mqtt_bridge.send_porch_relay(cmd)
+                # Confirmation arrives via MQTT porch state → _on_porch_mqtt_state
+            # No HTTP fallback for porch: ESP01-RELAY's own HTTP poll handles it
+        except Exception as e:
+            logger.warning(f'Porch command execute error: {e}')
 
     def _push_firebase_status(self) -> None:
         """Push current Pi status snapshot to Firebase."""
