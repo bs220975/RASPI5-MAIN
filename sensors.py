@@ -408,15 +408,22 @@ class GPIOSensorManager(BaseSensor):
             return False
 
     def _reed_poll_loop(self) -> None:
-        """Poll reed switch at 50 ms intervals with 300 ms debounce."""
+        """Poll reed switch at 50 ms intervals with extended debounce + cooldown.
+
+        DEBOUNCE is 2 s (was 0.3 s) to reject EMI bursts from the nearby
+        LD2420 24 GHz radar.  MIN_INTERVAL prevents paired false events that
+        appear as an open immediately followed by a close (or vice versa).
+        """
         pin = self._config.reed_switch_pin
-        DEBOUNCE = 0.3  # seconds the new state must be held before firing
+        DEBOUNCE = 2.0      # seconds new state must be held — rejects sub-2 s EMI bursts
+        MIN_INTERVAL = 5.0  # minimum seconds between consecutive door events
         try:
             stable = GPIO.input(pin)
         except Exception:
             return
         candidate = stable
         candidate_since: Optional[float] = None
+        last_event_at: float = 0.0
         while self._initialized:
             time.sleep(0.05)
             try:
@@ -433,10 +440,21 @@ class GPIOSensorManager(BaseSensor):
                     candidate = raw
                     candidate_since = time.monotonic()
                 elif candidate_since and (time.monotonic() - candidate_since) >= DEBOUNCE:
-                    # Held long enough — confirm and fire
-                    stable = candidate
-                    candidate_since = None
-                    self._reed_on_change(stable)
+                    now = time.monotonic()
+                    if (now - last_event_at) >= MIN_INTERVAL:
+                        # Held long enough and cooldown elapsed — real event
+                        stable = candidate
+                        candidate_since = None
+                        last_event_at = now
+                        self._reed_on_change(stable)
+                    else:
+                        # Within cooldown — likely EMI artifact paired with previous event
+                        logger.warning(
+                            "Reed: state change suppressed (%.1fs < %.0fs cooldown) — possible EMI",
+                            now - last_event_at, MIN_INTERVAL
+                        )
+                        candidate = stable
+                        candidate_since = None
 
     def _reed_on_change(self, pin_high: int) -> None:
         """Fire the appropriate door callback when reed switch state changes."""

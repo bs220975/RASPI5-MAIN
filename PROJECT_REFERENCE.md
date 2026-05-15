@@ -10,10 +10,50 @@ directly to AWS IoT / Firebase / Telegram for security alerts that must survive 
 
 ---
 
+## Contents
+
+- [Change Log](#change-log)
+- [Hardware — GPIO Pins](#hardware--gpio-pins)
+- [Architecture](#architecture)
+  - [ESP32-RADAR: direct cloud paths (Pi-independent)](#esp32-radar--direct-cloud-paths-pi-independent)
+  - [Pi / local MQTT paths (Pi-dependent)](#pi--local-mqtt-paths-pi-dependent)
+  - [What survives a Pi outage](#what-survives-a-pi-outage)
+- [MQTT Topics](#mqtt-topics)
+  - [Lobby relay — ESP01-LL-RLY](#lobby-relay--esp01-ll-rly-at-192168185)
+  - [Porch relay — ESP01-RELAY](#porch-relay--esp01-relay-at-1921681111)
+  - [Radar sensor — ESP32-RADAR](#radar-sensor--esp32-radar-at-192168187)
+  - [DHT11 sensor](#dht11-sensor-on-esp32-radar)
+- [Firebase RTDB Paths](#firebase-rtdb-paths)
+  - [Written by Pi](#written-by-pi)
+  - [Read by Pi (SSE streams)](#read-by-pi-sse-streams)
+  - [Written directly by ESP32-RADAR](#written-directly-by-esp32-radar-pi-down-resilience)
+- [Module Reference](#module-reference)
+  - [main.py](#mainpy--main-controller-raspberrypicontroller)
+  - [mqtt_bridge.py](#mqtt_bridgepy--mqttbridge)
+  - [firebase_logger.py](#firebase_loggerpy--firebaselogger)
+  - [sensors.py](#sensorspy--sensormanager--gpiomanager--radarsensor)
+  - [config.py](#configpy--appconfig-and-sub-configs)
+  - [video_recorder.py](#video_recorderpy--videorecorder)
+  - [esp_devices.py](#esp_devicespy--espdevicemanager)
+  - [telegram_handler.py](#telegram_handlerpy--telegramhandler)
+  - [influxdb_logger.py](#influxdb_loggerpy--influxdblogger)
+- [Automation Logic](#automation-logic)
+  - [ESP32-RADAR → App siren](#esp32-radar--app-siren-direct-2026-05-14)
+  - [Pi local radar → lobby light](#pi-local-radar--lobby-light-existing)
+  - [ESP32-RADAR → porch light](#esp32-radar--porch-light-new--2026-05-14)
+  - [App-commanded lobby light](#app-commanded-lobby-light)
+  - [App-commanded porch light](#app-commanded-porch-light)
+- [Running the Service](#running-the-service)
+- [Verify MQTT Devices](#verify-mqtt-devices)
+- [Troubleshooting](#troubleshooting)
+
+---
+
 ## Change Log
 
 | Date | Change |
 |---|---|
+| 2026-05-15 | Reed switch false door alerts: raised debounce 0.3 s → 2.0 s, added 5 s MIN_INTERVAL cooldown; root cause is LD2420 EMI on GPIO 26 wire; hardware RC filter recommended (see Troubleshooting) |
 | 2026-05-14 | Created PROJECT_REFERENCE.md |
 | 2026-05-14 | MQTT Option B+C: added porch relay (ESP01-RELAY) + radar motion (ESP32-RADAR) to `mqtt_bridge.py`; night-time relay automation + 5-min off timer in `main.py`; Firebase SSE stream for `lights/lobby`; `push_porch_relay_status()` in `firebase_logger.py`; multi-stream `start_command_stream()` |
 | 2026-05-14 | Video quality: CRF 26 re-encode, bitrate 1 Mbps, motion timeout 10 s, max duration 120 s |
@@ -253,9 +293,10 @@ Pure HTTPS REST to Firebase RTDB (no auth — database rules allow public write)
 - **LD2420 radar** (`/dev/serial0`) — `RadarSensor.check_motion()` → `bool`
 - **PIR** (GPIO 25) — via `gpiozero.MotionSensor`
 - **MMS** (GPIO 27) — via `gpiozero.DigitalInputDevice`
-- **Reed switch** (GPIO 26) — polling thread (50 ms), 300 ms software debounce
+- **Reed switch** (GPIO 26) — polling thread (50 ms), 2.0 s software debounce, 5 s min-interval cooldown
   - `set_reed_callbacks(on_open, on_close)` — called from `main.py`
   - Uses `RPi.GPIO` (not gpiozero — avoids edge-detect conflict)
+  - Debounce raised from 0.3 s to 2.0 s to reject LD2420 EMI (see Troubleshooting)
 
 ---
 
@@ -405,6 +446,7 @@ mosquitto_pub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/cmd/relay" -
 | Porch light not turning on at night | Check radar MQTT arriving (`home/esp32/radar2/motion`); check night hours 18–06; check `_porch_light_on` state |
 | Motion video not sent to Telegram | Check camera initialized (log: `Camera initialized successfully`); check disk space |
 | Reed switch not firing | Check GPIO 26 wiring — one leg to GPIO 26, other to GND. Check log for "Reed switch initialized" |
+| False Door OPENED / CLOSED Telegram alerts (no activity) | **Cause:** LD2420 24 GHz radar EMI couples into GPIO 26 wire. **Software fix (applied):** debounce raised to 2.0 s, 5 s cooldown between events (`sensors.py _reed_poll_loop`). Suppressed events log `WARNING Reed: state change suppressed`. **Permanent hardware fix:** add 10 kΩ series resistor between reed switch and GPIO 26, plus 100 nF capacitor from GPIO 26 to GND — this RC low-pass filter (~160 Hz cutoff) blocks RF before it reaches the pin. Also: move LD2420 ≥ 30 cm from the Pi, or add a ferrite bead on the reed switch wire. |
 | MQTT bridge reconnecting constantly | Check Mosquitto running (`statusmqtt`); check credentials `mq/mq`; check `localhost:1883` |
 | `_on_porch_mqtt_state` not firing | Check ESP01-RELAY online (`home/esp01/porch/availability`); check firmware has MQTT |
 | Porch light stays on after dawn | 5-min off timer only fires on `motion=OFF` from radar; check ESP32-RADAR is publishing MQTT |
