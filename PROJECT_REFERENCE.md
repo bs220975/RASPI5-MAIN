@@ -46,6 +46,14 @@ directly to AWS IoT / Firebase / Telegram for security alerts that must survive 
 - [Running the Service](#running-the-service)
 - [Verify MQTT Devices](#verify-mqtt-devices)
 - [Troubleshooting](#troubleshooting)
+- [Reed Switch EMI Fix — RC Filter (GPIO 26)](#reed-switch-emi-fix--rc-filter-gpio-26)
+  - [Problem](#problem)
+  - [Components needed](#components-needed)
+  - [Circuit diagram](#circuit-diagram)
+  - [Physical wiring on Pi GPIO header](#physical-wiring-on-pi-gpio-header)
+  - [How the RC filter works](#how-the-rc-filter-works)
+  - [Software fix already applied](#software-fix-already-applied)
+  - [Testing after hardware fix](#testing-after-hardware-fix)
 
 ---
 
@@ -453,3 +461,158 @@ mosquitto_pub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/cmd/relay" -
 | Firebase writes failing | Check internet connectivity; Firebase RTDB rules allow public write on `devices/`, `lights/` |
 | `mybot.service` crash-looping | Check `logs/error_log.txt`; check GPIO conflicts; check sensor hardware connected |
 | `start_command_stream` logs two streams | Expected — `living_room` and `lobby` both start on init |
+
+---
+
+## Reed Switch EMI Fix — RC Filter (GPIO 26)
+
+### Problem
+
+The LD2420 24 GHz radar sensor was sitting ~10 cm from the Raspberry Pi.
+Its continuous RF emissions coupled into the GPIO 26 wire (the wire acts as an antenna),
+forcing the pin HIGH even while the door was physically shut with the magnet in place.
+
+**Reed switch logic (normal behaviour):**
+```
+Magnet present (door closed) → switch contacts closed → pin pulled to GND → GPIO reads LOW  → no alert
+Magnet absent  (door open)   → switch contacts open   → pull-up active   → GPIO reads HIGH → Door OPENED alert
+```
+
+**What EMI was doing:**
+```
+Door closed, magnet in place → switch should hold pin LOW
+LD2420 RF burst → GPIO 26 forced HIGH → code sees "door open" → Telegram: 🚪 Door OPENED
+RF burst ends   → pin returns LOW     → code sees "door close" → Telegram: 🔒 Door CLOSED
+Repeat every few minutes with no one near the door.
+```
+
+---
+
+### Components Needed
+
+| Component | Value | Purpose |
+|---|---|---|
+| Resistor | **10 kΩ** (brown-black-orange) | Series resistor — limits current and forms RC pair with capacitor |
+| Capacitor | **100 nF** (ceramic, marked `104`) | Shunt capacitor — drains high-frequency noise to GND |
+
+Both are cheap through-hole components available at any electronics shop.
+Alternatively use **470 nF** capacitor for even stronger filtering (cutoff drops to ~34 Hz).
+
+---
+
+### Circuit Diagram
+
+```
+Reed Switch (door sensor)
+        │
+        │  one leg to GND directly
+        │  other leg goes through RC filter to GPIO 26
+        │
+        ├──────────────────────────────── GND
+        │
+        └──[ 10 kΩ ]──┬────────────────── GPIO 26 (BCM) = Pin 37 (physical)
+                      │
+                    [100 nF]
+                      │
+                     GND  (Pin 39 on header)
+```
+
+**Full schematic:**
+```
+Reed Switch
+  ┌──────┐
+  │      │ leg A ────────────────────────────────── GND (Pin 39)
+  │      │
+  │      │ leg B ──[R1: 10 kΩ]──┬────────────────── GPIO 26 (Pin 37)
+  └──────┘                      │
+   (magnet                    [C1: 100 nF]
+    closes                      │
+   contacts)                   GND (Pin 39)
+```
+
+- When the door is **closed**: magnet closes reed switch → leg B pulled to GND through the switch → GPIO 26 reads LOW ✅
+- When the door is **open**: switch open → internal pull-up holds GPIO 26 HIGH through 10 kΩ → GPIO reads HIGH ✅
+- When **EMI hits**: 24 GHz RF reaches the node between R1 and C1 — capacitor immediately shunts it to GND → GPIO 26 never sees it ✅
+
+---
+
+### Physical Wiring on Pi GPIO Header
+
+Raspberry Pi 4 — 40-pin header (BCM numbering):
+
+```
+                        Pi GPIO Header (right side, looking from top)
+                        ┌─────────────────────────────┐
+                        │  ...                        │
+                     35 │  GPIO 19        GPIO 26  37 │ ◄── connect RC filter output here
+                     36 │  GPIO 16        GPIO 12  32 │
+                     37 │  GPIO 26 ◄──    GND      39 │ ◄── connect capacitor bottom leg here
+                     38 │  GPIO 20        GPIO 21  40 │
+                        └─────────────────────────────┘
+
+Pin 37 = BCM GPIO 26  → RC filter output (junction of R1 and C1)
+Pin 39 = GND          → both: reed switch leg A, and bottom leg of C1
+```
+
+**Step-by-step wiring:**
+1. Reed switch **leg A** → **Pin 39** (GND)
+2. Reed switch **leg B** → one end of **R1 (10 kΩ)**
+3. Other end of **R1** → **Pin 37** (GPIO 26) AND top leg of **C1 (100 nF)**
+4. Bottom leg of **C1** → **Pin 39** (GND)
+
+> GND pins 39 and 6 and 14 etc. are all the same — use whichever is nearest on your breadboard.
+
+---
+
+### How the RC Filter Works
+
+The resistor and capacitor form a **low-pass filter**:
+
+```
+Cutoff frequency = 1 / (2π × R × C)
+                 = 1 / (2π × 10,000 × 0.0000001)
+                 ≈ 160 Hz
+```
+
+| Signal | Frequency | What the filter does |
+|---|---|---|
+| Reed switch open/close | ~0 Hz (DC step) | Passes through — GPIO sees the real state |
+| LD2420 radar RF | 24,000,000,000 Hz | Capacitor shorts it to GND — GPIO sees nothing |
+| General mains noise | 50 / 100 Hz | Mostly blocked — cutoff is 160 Hz |
+
+At 24 GHz the capacitor acts almost like a **dead short to GND** — the RF has nowhere to go except back to ground before it ever reaches the GPIO pin.
+
+---
+
+### Software Fix Already Applied
+
+Even before soldering the hardware filter, the following software changes were made in `sensors.py → _reed_poll_loop` to reduce false alerts:
+
+| Parameter | Old value | New value | Effect |
+|---|---|---|---|
+| `DEBOUNCE` | 0.3 s | **2.0 s** | Pin must hold new state for 2 s before firing — rejects short EMI bursts |
+| `MIN_INTERVAL` | — | **5.0 s** | Minimum 5 s between any two door events — stops paired false open+close |
+
+Suppressed events are logged so you can monitor whether interference is still occurring:
+```
+WARNING Reed: state change suppressed (1.3s < 5s cooldown) — possible EMI
+```
+
+---
+
+### Testing After Hardware Fix
+
+After soldering R1 and C1:
+
+```bash
+# Watch live GPIO 26 state — should stay stable at 0 (door closed) with no activity
+watch -n 0.5 "raspi-gpio get 26"
+
+# Watch service log for any suppressed events
+journalctl -u mybot.service -f | grep -i reed
+
+# Confirm no false alerts in last 30 min of logs
+journalctl -u mybot.service --since "30 min ago" | grep -i door
+```
+
+If `raspi-gpio get 26` reads `level=0` steadily while the door is closed and the radar is running, the hardware fix is working.
