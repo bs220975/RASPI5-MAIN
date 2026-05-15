@@ -1,0 +1,30 @@
+[Unit]
+Description=MQTT Data to InfluxDB and AWS Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/bin/sleep 5
+# Activate venv and run the script
+ExecStart=/bin/bash -c 'source /home/pi5/myenv/bin/activate && exec python /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/influx_aws_publish/influxdb2_aws_publish.py'
+
+# Set environment variables
+Environment="PYTHONUNBUFFERED=1"
+Environment="PATH=/home/pi5/myenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="DISPLAY=:0"
+Environment="XAUTHORITY=/home/pi5/.Xauthority"
+
+# Logging
+#StandardOutput=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Output_influxdb_aws_publish.log
+StandardError=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Error_influxdb_aws_publish.log
+
+# Restart policy
+Restart=on-failure
+RestartSec=120
+StartLimitBurst=1
+StartLimitIntervalSec=5min
+User=pi5
+
+[Install]
+WantedBy=multi-user.target

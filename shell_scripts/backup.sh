@@ -1,7 +1,7 @@
 #!/bin/bash
 
-SOURCE="/home/pi/pi4_drive"
-DEST_ROOT="/home/pi/Non-Sync_backup_folder"
+SOURCE="/home/pi5/pi5_drive"
+DEST_ROOT="/home/pi5/Non-Sync_backup_folder"
 
 # Colors
 RED='\033[0;31m'
@@ -16,7 +16,7 @@ TIME=$(date +"%H-%M")
 BACKUP_PATH="$DEST_ROOT/backup_${DATE}_${TIME}"
 
 echo ""
-echo -e "${CYAN}${BOLD}=== Pi4 Local Backup ===${NC}"
+echo -e "${CYAN}${BOLD}=== Pi5 Local Backup ===${NC}"
 echo ""
 
 # Check source exists

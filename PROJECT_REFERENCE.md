@@ -1,4 +1,4 @@
-# RASPI4-MAIN — Project Reference
+# RASPI5-MAIN — Project Reference
 
 Raspberry Pi 4 home automation bridge. Runs as a systemd service (`mybot.service`)
 and coordinates local sensors, ESP IoT devices, Firebase RTDB, Telegram, and InfluxDB.
@@ -417,7 +417,7 @@ journalctl -u mybot.service -f
 servicemybot   # alias
 
 # Run manually (debug)
-cd /home/pi/pi4_drive/Git_projects/RASPI4-MAIN
+cd /home/pi/pi4_drive/Git_projects/RASPI5-MAIN
 source /home/pi/myenv/bin/activate
 python3 main.py
 ```

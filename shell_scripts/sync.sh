@@ -1,7 +1,7 @@
 #!/bin/bash
 
-SRC_REMOTE="gdrive:/pi4_drive"
-DEST_LOCAL="/home/pi/pi4_drive"
+SRC_REMOTE="gdrive:/pi5_drive"
+DEST_LOCAL="/home/pi5/pi5_drive"
 
 # Colors
 RED='\033[0;31m'
@@ -76,7 +76,7 @@ function dry_run_summary() {
 
 # Direction menu
 echo ""
-echo -e "${CYAN}${BOLD}=== Pi4 Google Drive Sync ===${NC}"
+echo -e "${CYAN}${BOLD}=== Pi5 Google Drive Sync ===${NC}"
 echo ""
 echo "  1) Drive → Pi  (download from Google Drive to Pi)"
 echo "  2) Pi → Drive  (upload from Pi to Google Drive)"

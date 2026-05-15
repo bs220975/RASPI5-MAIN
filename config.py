@@ -251,7 +251,7 @@ class VideoConfig:
         bitrate: Video encoding bitrate
         disk_usage_threshold: Disk usage percentage to trigger cleanup
     """
-    video_dir: str = '/home/pi/raspi_camera_videos'
+    video_dir: str = '/home/pi5/raspi_camera_videos'
     min_duration: int = 10
     max_duration: int = 120
     motion_timeout: int = 10
@@ -340,7 +340,7 @@ class MqttConfig:
     port: int = field(default_factory=lambda: _get_env_int('MQTT_PORT', 1883))
     username: str = field(default_factory=lambda: _get_env('MQTT_USER', 'mq'))
     password: str = field(default_factory=lambda: _get_env('MQTT_PASS', 'mq'))
-    client_id: str = 'raspi4-bridge'
+    client_id: str = 'raspi5-bridge'
     keepalive: int = 60
 
 
@@ -365,9 +365,9 @@ class AppConfig:
     last_updated: str = '30 April 2026'
 
     # Paths
-    log_file_path: str = '/home/pi/pi4_drive/Git_projects/RASPI4-MAIN/logs/error_log.txt'
-    pdf_file_path: str = '/home/pi/esp32/python_raspi/Running_codes/DTH11_temperature_Humidity.pdf'
-    image_file_path: str = '/home/pi/esp32/python_raspi/Running_codes/temperature_humidity_plot.png'
+    log_file_path: str = '/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/error_log.txt'
+    pdf_file_path: str = '/home/pi5/esp32/python_raspi/Running_codes/DTH11_temperature_Humidity.pdf'
+    image_file_path: str = '/home/pi5/esp32/python_raspi/Running_codes/temperature_humidity_plot.png'
 
     # Timing settings
     light_cooldown: int = 30  # seconds between light activations

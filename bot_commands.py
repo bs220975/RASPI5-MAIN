@@ -437,11 +437,11 @@ class BotCommandHandler:
 
     def _cmd_sync_to_pi(self) -> None:
         """Sync from Google Drive to Pi"""
-        self._run_rclone_sync("gdrive:/pi4_drive", "/home/pi/pi4_drive")
+        self._run_rclone_sync("gdrive:/pi5_drive", "/home/pi5/pi5_drive")
 
     def _cmd_sync_to_drive(self) -> None:
         """Sync from Pi to Google Drive"""
-        self._run_rclone_sync("/home/pi/pi4_drive", "gdrive:/pi4_drive")
+        self._run_rclone_sync("/home/pi5/pi5_drive", "gdrive:/pi5_drive")
 
     def _run_rclone_sync(self, source: str, dest: str) -> None:
         """Run rclone sync command"""
@@ -479,7 +479,7 @@ class BotCommandHandler:
     def _cmd_delete_storage(self) -> None:
         """Delete all recorded videos"""
         try:
-            os.system('rm -rf /home/pi/raspi_camera_videos/*')
+            os.system('rm -rf /home/pi5/raspi_camera_videos/*')
             self.telegram.send_text("Video storage cleared")
             self._cmd_disk_status()
         except Exception as e:
@@ -633,9 +633,9 @@ class BotCommandHandler:
     # === Log File Commands ===
 
     LOG_FILES = {
-        'error':   '/home/pi/pi4_drive/Error_and_Logs/error_log.txt',
-        'service': '/home/pi/pi4_drive/Error_and_Logs/Output_mybot_service.log',
-        'stderr':  '/home/pi/pi4_drive/Error_and_Logs/Error_mybot_service.log',
+        'error':   '/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/error_log.txt',
+        'service': '/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Output_mybot_service.log',
+        'stderr':  '/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Error_mybot_service.log',
     }
     MAX_TAIL_LINES = 100           # lines to send as text if file is too large
     MAX_SEND_BYTES = 45 * 1024 * 1024  # 45 MB — Telegram document limit is 50 MB

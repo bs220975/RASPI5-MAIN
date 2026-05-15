@@ -4,7 +4,7 @@ Firebase Realtime Database Logger for Raspberry Pi Home Automation System
 Writes live status to the existing Firebase schema (no auth required —
 database rules allow public read/write on these nodes):
 
-    /devices/RASPI-4/     — Pi heartbeat (lastSeen, reachable, cpuTemp, …)
+    /devices/RASPI-5/     — Pi heartbeat (lastSeen, reachable, cpuTemp, …)
     /devices/ESP01-LL-RLY/ — Lobby relay status (192.168.1.85)
     /devices/esp01_relay/  — Porch relay status (192.168.1.111)
     /lights/live/          — Live motion & light state for the Android app
@@ -57,7 +57,7 @@ class FirebaseLogger:
     relevant nodes (devices, lights, commands).
 
     Schema written:
-        /devices/RASPI-4/   lastSeen, reachable, cpuTemp, uptime,
+        /devices/RASPI-5/   lastSeen, reachable, cpuTemp, uptime,
                               motionDetected, recording
         /devices/esp01_relay/ lastSeen, reachable, relayState
         /lights/live/         motionDetected, lobbyLight, lastUpdate
@@ -83,7 +83,7 @@ class FirebaseLogger:
         """Verify database is reachable with a lightweight GET."""
         try:
             resp = requests.get(
-                f'{self._db_url}/devices/RASPI-4/reachable.json',
+                f'{self._db_url}/devices/RASPI-5/reachable.json',
                 timeout=self._timeout,
             )
             if resp.status_code == 200:
@@ -100,7 +100,7 @@ class FirebaseLogger:
         recording: bool = False,
     ) -> bool:
         """
-        Overwrite /devices/RASPI-4/ with current Pi snapshot.
+        Overwrite /devices/RASPI-5/ with current Pi snapshot.
 
         Args:
             motion:    Current radar motion state
@@ -114,7 +114,7 @@ class FirebaseLogger:
             'motionDetected': motion,
             'recording':      recording,
         }
-        ok = self._patch('devices/RASPI-4', data)
+        ok = self._patch('devices/RASPI-5', data)
 
         # Update lights/live so the Android app sees motion in real time
         self._patch('lights/live', {
@@ -220,7 +220,7 @@ class FirebaseLogger:
     def mark_offline(self) -> bool:
         """Mark Pi as offline in Firebase on clean shutdown."""
         self.stop_command_stream()
-        return self._patch('devices/RASPI-4', {
+        return self._patch('devices/RASPI-5', {
             'lastSeen':  _ms_now(),
             'reachable': False,
         })

@@ -29,9 +29,9 @@ AWS_CLIENT_ID = "RaspberryPi"
 AWS_DHT_PUBLISH = "DHT11"
 AWS_ENERGY_PUBLISH = "ENERGY"
 AWS_MOTION_PUBLISH = "MOTION"
-AWS_CERT_PATH = "/home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/aws_certs/certificate.pem.crt"
-AWS_KEY_PATH = "/home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/aws_certs/private.pem.key"
-AWS_ROOT_CA_PATH = "/home/pi/pi4_drive/pi4_python_projects/RASPI4-MAIN/aws_certs/AmazonRootCA1.pem"
+AWS_CERT_PATH = "/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/aws_certs/certificate.pem.crt"
+AWS_KEY_PATH = "/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/aws_certs/private.pem.key"
+AWS_ROOT_CA_PATH = "/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/aws_certs/AmazonRootCA1.pem"
 
 # Timezone configuration
 INDIAN_TZ = pytz.timezone('Asia/Kolkata')
