@@ -115,6 +115,11 @@ class RaspberryPiController:
         self._last_porch_cmd: Optional[bool] = None
         self._porch_cmd_timer: Optional[threading.Timer] = None
 
+        # LP porch relay state (ESP8266-LP-RLY / L-Porch-Light app switch)
+        self._lp_rly_light_on: bool = False
+        self._last_lp_rly_cmd: Optional[bool] = None
+        self._lp_rly_cmd_timer: Optional[threading.Timer] = None
+
         # Setup logging
         self._setup_logging()
 
@@ -231,7 +236,10 @@ class RaspberryPiController:
                 self.firebase.start_command_stream(
                     'lobby', self._on_firebase_porch_light_cmd
                 )
-                logger.info("Firebase light command streams: started (living_room + lobby)")
+                self.firebase.start_command_stream(
+                    'L-Porch-Light', self._on_firebase_lp_rly_cmd
+                )
+                logger.info("Firebase light command streams: started (living_room + lobby + L-Porch-Light)")
             else:
                 logger.warning("Firebase connection failed - live status disabled")
 
@@ -242,6 +250,8 @@ class RaspberryPiController:
                 on_lobby_state=self._on_lobby_mqtt_state,
                 on_porch_state=self._on_porch_mqtt_state,
                 on_porch_availability=self._on_porch_availability_changed,
+                on_lp_rly_state=self._on_lp_rly_mqtt_state,
+                on_lp_rly_availability=self._on_lp_rly_availability_changed,
                 on_radar_motion=self._on_radar_motion,
             )
             if self.mqtt_bridge.start():
@@ -679,6 +689,76 @@ class RaspberryPiController:
         except Exception as e:
             logger.warning(f'Porch command execute error: {e}')
 
+    # ------------------------------------------------------------------
+    # ESP8266-LP-RLY (L-Porch-Light) callbacks
+    # ------------------------------------------------------------------
+
+    def _on_lp_rly_mqtt_state(self, payload: str) -> None:
+        """
+        Handle ESP8266-LP-RLY relay state arriving over MQTT.
+
+        Updates /devices/ESP8266-LP-RLY/ and lights/L-Porch-Light/confirmed
+        so the app switch reflects the actual physical relay state.
+        """
+        relay_on = payload.upper() == 'ON'
+        self._lp_rly_light_on = relay_on
+        logger.info(f'LP-RLY state via MQTT: {"ON" if relay_on else "OFF"}')
+
+        def _update() -> None:
+            if self.firebase:
+                self.firebase.push_lp_rly_status(reachable=True, relay_on=relay_on)
+        threading.Thread(target=_update, daemon=True).start()
+
+    def _on_lp_rly_availability_changed(self, available: bool) -> None:
+        """
+        Handle ESP8266-LP-RLY MQTT LWT (online / offline).
+
+        Immediately marks the Firebase device node reachable/unreachable
+        so the app switch shows the correct dot colour without waiting.
+        """
+        logger.info(f'LP-RLY availability: {"online" if available else "offline"}')
+
+        def _update() -> None:
+            if self.firebase:
+                self.firebase.push_lp_rly_status(
+                    reachable=available,
+                    relay_on=self._lp_rly_light_on if available else False,
+                )
+        threading.Thread(target=_update, daemon=True).start()
+
+    def _on_firebase_lp_rly_cmd(self, cmd: bool) -> None:
+        """
+        Handle an L-Porch-Light command from the Firebase SSE stream.
+
+        Debounces rapid bursts (Firebase reconnect replays), then sends
+        the final ON/OFF to ESP8266-LP-RLY via MQTT.
+        """
+        logger.info(f'Firebase stream: L-Porch-Light {"ON" if cmd else "OFF"}')
+
+        if self._lp_rly_cmd_timer is not None:
+            self._lp_rly_cmd_timer.cancel()
+
+        self._lp_rly_cmd_timer = threading.Timer(
+            0.4, self._execute_lp_rly_cmd, args=(cmd,)
+        )
+        self._lp_rly_cmd_timer.daemon = True
+        self._lp_rly_cmd_timer.start()
+
+    def _execute_lp_rly_cmd(self, cmd: bool) -> None:
+        """Execute the debounced LP-RLY relay command."""
+        if cmd == self._last_lp_rly_cmd:
+            logger.debug(f'LP-RLY cmd {"ON" if cmd else "OFF"} skipped — same as last')
+            return
+        self._last_lp_rly_cmd = cmd
+        logger.info(f'Executing LP-RLY command: {"ON" if cmd else "OFF"}')
+
+        try:
+            if self.mqtt_bridge and self.mqtt_bridge.is_connected:
+                self.mqtt_bridge.send_lp_rly_relay(cmd)
+                # Confirmation arrives via MQTT state → _on_lp_rly_mqtt_state
+        except Exception as e:
+            logger.warning(f'LP-RLY command execute error: {e}')
+
     def _push_firebase_status(self) -> None:
         """Push current Pi status snapshot to Firebase."""
         if not self.firebase:
@@ -815,6 +895,9 @@ class RaspberryPiController:
 
         if self._light_cmd_timer is not None:
             self._light_cmd_timer.cancel()
+
+        if self._lp_rly_cmd_timer is not None:
+            self._lp_rly_cmd_timer.cancel()
 
         if self.mqtt_bridge:
             logger.info("Stopping MQTT bridge...")

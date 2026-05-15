@@ -1,22 +1,27 @@
 """
 MQTT bridge between local Mosquitto and the Pi home automation system.
 
-Manages three MQTT-native devices:
-  ESP01-LL-RLY  (lobby relay,  192.168.1.85)  — lobby light
-  ESP01-RELAY   (porch relay,  192.168.1.111) — porch / entrance light
-  ESP32-RADAR   (radar sensor, 192.168.1.87)  — motion detection
+Manages four MQTT-native devices:
+  ESP01-LL-RLY    (lobby relay,      192.168.1.85)  — lobby light
+  ESP01-RELAY     (porch relay,      192.168.1.111) — porch / entrance light
+  ESP8266-LP-RLY  (LP porch relay,   192.168.1.89)  — L-Porch-Light app switch
+  ESP32-RADAR     (radar sensor,     192.168.1.87)  — motion detection
 
 Topics managed:
-    home/esp01/lobby/cmd/relay    Pi → ESP01-LL-RLY:  ON / OFF  (QoS 1)
-    home/esp01/lobby/state        ESP01-LL-RLY → Pi:  ON / OFF
-    home/esp01/lobby/availability ESP01-LL-RLY → Pi:  online / offline
+    home/esp01/lobby/cmd/relay          Pi → ESP01-LL-RLY:   ON / OFF  (QoS 1)
+    home/esp01/lobby/state              ESP01-LL-RLY → Pi:   ON / OFF
+    home/esp01/lobby/availability       ESP01-LL-RLY → Pi:   online / offline
 
-    home/esp01/porch/cmd/relay    Pi → ESP01-RELAY:   ON / OFF  (QoS 1)
-    home/esp01/porch/state        ESP01-RELAY → Pi:   ON / OFF
-    home/esp01/porch/availability ESP01-RELAY → Pi:   online / offline
+    home/esp01/porch/cmd/relay          Pi → ESP01-RELAY:    ON / OFF  (QoS 1)
+    home/esp01/porch/state              ESP01-RELAY → Pi:    ON / OFF
+    home/esp01/porch/availability       ESP01-RELAY → Pi:    online / offline
 
-    home/esp32/radar2/motion      ESP32-RADAR → Pi:   ON / OFF
-    home/esp32/radar2/availability ESP32-RADAR → Pi:  online / offline
+    home/switches/L-Porch-Light/cmd          Pi → ESP8266-LP-RLY: ON / OFF  (QoS 1)
+    home/switches/L-Porch-Light/state        ESP8266-LP-RLY → Pi: ON / OFF
+    home/switches/L-Porch-Light/availability ESP8266-LP-RLY → Pi: online / offline
+
+    home/esp32/radar2/motion            ESP32-RADAR → Pi:    ON / OFF
+    home/esp32/radar2/availability      ESP32-RADAR → Pi:    online / offline
 """
 import logging
 from typing import Callable, Optional
@@ -39,6 +44,11 @@ _LOBBY_AVAIL_TOPIC = 'home/esp01/lobby/availability'
 _PORCH_CMD_TOPIC   = 'home/esp01/porch/cmd/relay'
 _PORCH_STATE_TOPIC = 'home/esp01/porch/state'
 _PORCH_AVAIL_TOPIC = 'home/esp01/porch/availability'
+
+# ── LP Porch relay (ESP8266-LP-RLY at 192.168.1.89) — app switch L-Porch-Light
+_LP_RLY_CMD_TOPIC   = 'home/switches/L-Porch-Light/cmd'
+_LP_RLY_STATE_TOPIC = 'home/switches/L-Porch-Light/state'
+_LP_RLY_AVAIL_TOPIC = 'home/switches/L-Porch-Light/availability'
 
 # ── Radar sensor (ESP32-RADAR at 192.168.1.87) ──────────────────────────────
 _RADAR_MOTION_TOPIC = 'home/esp32/radar2/motion'
@@ -72,6 +82,8 @@ class MqttBridge:
         on_lobby_availability: Optional[Callable[[bool], None]] = None,
         on_porch_state: Optional[Callable[[str], None]] = None,
         on_porch_availability: Optional[Callable[[bool], None]] = None,
+        on_lp_rly_state: Optional[Callable[[str], None]] = None,
+        on_lp_rly_availability: Optional[Callable[[bool], None]] = None,
         on_radar_motion: Optional[Callable[[str], None]] = None,
         on_radar_availability: Optional[Callable[[bool], None]] = None,
     ) -> None:
@@ -80,12 +92,15 @@ class MqttBridge:
         self._on_lobby_availability = on_lobby_availability
         self._on_porch_state        = on_porch_state
         self._on_porch_availability = on_porch_availability
+        self._on_lp_rly_state        = on_lp_rly_state
+        self._on_lp_rly_availability = on_lp_rly_availability
         self._on_radar_motion       = on_radar_motion
         self._on_radar_availability = on_radar_availability
         self._client: Optional[object] = None
         self._connected = False
         self._lobby_available = False
         self._porch_available = False
+        self._lp_rly_available = False
 
     # ------------------------------------------------------------------
     # Public API
@@ -143,6 +158,11 @@ class MqttBridge:
         """True if ESP01-RELAY last published 'online'."""
         return self._porch_available
 
+    @property
+    def lp_rly_available(self) -> bool:
+        """True if ESP8266-LP-RLY last published 'online'."""
+        return self._lp_rly_available
+
     def send_lobby_relay(self, state: bool) -> bool:
         """Publish ON or OFF to the lobby relay command topic (QoS 1)."""
         return self._publish(_LOBBY_CMD_TOPIC, 'ON' if state else 'OFF')
@@ -150,6 +170,10 @@ class MqttBridge:
     def send_porch_relay(self, state: bool) -> bool:
         """Publish ON or OFF to the porch relay command topic (QoS 1)."""
         return self._publish(_PORCH_CMD_TOPIC, 'ON' if state else 'OFF')
+
+    def send_lp_rly_relay(self, state: bool) -> bool:
+        """Publish ON or OFF to the ESP8266-LP-RLY (L-Porch-Light) command topic (QoS 1)."""
+        return self._publish(_LP_RLY_CMD_TOPIC, 'ON' if state else 'OFF')
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -175,12 +199,14 @@ class MqttBridge:
             self._connected = True
             logger.info("MQTT bridge: connected to broker")
             client.subscribe([
-                (_LOBBY_STATE_TOPIC,  1),
-                (_LOBBY_AVAIL_TOPIC,  1),
-                (_PORCH_STATE_TOPIC,  1),
-                (_PORCH_AVAIL_TOPIC,  1),
-                (_RADAR_MOTION_TOPIC, 1),
-                (_RADAR_AVAIL_TOPIC,  1),
+                (_LOBBY_STATE_TOPIC,   1),
+                (_LOBBY_AVAIL_TOPIC,   1),
+                (_PORCH_STATE_TOPIC,   1),
+                (_PORCH_AVAIL_TOPIC,   1),
+                (_LP_RLY_STATE_TOPIC,  1),
+                (_LP_RLY_AVAIL_TOPIC,  1),
+                (_RADAR_MOTION_TOPIC,  1),
+                (_RADAR_AVAIL_TOPIC,   1),
             ])
             logger.info("MQTT bridge: subscribed to all device topics")
         else:
@@ -225,6 +251,19 @@ class MqttBridge:
             logger.info(f"MQTT: porch state = {payload}")
             if self._on_porch_state:
                 self._on_porch_state(payload)
+
+        # ── LP Porch relay (ESP8266-LP-RLY / L-Porch-Light) ─────────────
+        elif topic == _LP_RLY_AVAIL_TOPIC:
+            available = payload.lower() == 'online'
+            self._lp_rly_available = available
+            logger.info(f"MQTT: LP-RLY availability = {payload}")
+            if self._on_lp_rly_availability:
+                self._on_lp_rly_availability(available)
+
+        elif topic == _LP_RLY_STATE_TOPIC:
+            logger.info(f"MQTT: LP-RLY state = {payload}")
+            if self._on_lp_rly_state:
+                self._on_lp_rly_state(payload)
 
         # ── Radar motion ─────────────────────────────────────────────────
         elif topic == _RADAR_AVAIL_TOPIC:

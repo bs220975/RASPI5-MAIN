@@ -155,14 +155,14 @@ class ESPDeviceConfig:
     Format: 'device_name': 'ip_address:port'
     """
     devices: Dict[str, str] = field(default_factory=lambda: {
-        'ESP01_Lobby': '192.168.1.85',
-        'ESP01_Porch': '192.168.1.89:1089',
-        'ESP32_OLED': '192.168.1.102:1020',
-        'ESP32_GSM': '192.168.1.91:9191',
-        'ESP32_ENERGY': '192.168.1.131:1031',
-        'ESP8266_DHT': '192.168.1.107:1007',
-        'ESP32_Test': '192.168.1.132:1032',
-        'ESP01_Relay': '192.168.1.85',
+        'ESP01_Lobby':    '192.168.1.85',
+        'ESP8266_LP_RLY': '192.168.1.89:1089',   # ESP8266-LP-RLY (L-Porch-Light)
+        'ESP32_OLED':     '192.168.1.102:1020',
+        'ESP32_GSM':      '192.168.1.91:9191',
+        'ESP32_ENERGY':   '192.168.1.131:1031',
+        'ESP8266_DHT':    '192.168.1.107:1007',
+        'ESP32_Test':     '192.168.1.132:1032',
+        'ESP01_Relay':    '192.168.1.85',
     })
     request_timeout: int = 5  # seconds
 
@@ -173,8 +173,8 @@ class ESPDeviceConfig:
 
     @property
     def porch_ip(self) -> str:
-        """Get porch ESP device IP:port."""
-        return self.devices.get('ESP01_Porch', '')
+        """Get LP porch relay IP:port (ESP8266-LP-RLY)."""
+        return self.devices.get('ESP8266_LP_RLY', '')
 
     @property
     def oled_ip(self) -> str:

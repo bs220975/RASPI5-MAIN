@@ -195,8 +195,8 @@ class ESPDeviceManager:
         return self.send_command('ESP01_Lobby', command)
 
     def send_to_porch(self, command: str = "motion") -> Tuple[bool, str]:
-        """Send command to ESP01 Porch device"""
-        return self.send_command('ESP01_Porch', command)
+        """Send command to ESP8266-LP-RLY porch device"""
+        return self.send_command('ESP8266_LP_RLY', command)
 
     def send_to_oled(self, command: str = "oled") -> Tuple[bool, str]:
         """Send command to ESP32 OLED device"""
@@ -215,11 +215,11 @@ class ESPDeviceManager:
         return self.send_to_lobby("lightoff")
 
     def porch_light_on(self) -> Tuple[bool, str]:
-        """Turn on porch light"""
+        """Turn on LP porch light (ESP8266-LP-RLY)"""
         return self.send_to_porch("lighton")
 
     def porch_light_off(self) -> Tuple[bool, str]:
-        """Turn off porch light"""
+        """Turn off LP porch light (ESP8266-LP-RLY)"""
         return self.send_to_porch("lightoff")
 
     def get_relay_state(self) -> Optional[str]:
