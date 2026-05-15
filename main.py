@@ -241,6 +241,7 @@ class RaspberryPiController:
                 self.config.mqtt,
                 on_lobby_state=self._on_lobby_mqtt_state,
                 on_porch_state=self._on_porch_mqtt_state,
+                on_porch_availability=self._on_porch_availability_changed,
                 on_radar_motion=self._on_radar_motion,
             )
             if self.mqtt_bridge.start():
@@ -584,6 +585,29 @@ class RaspberryPiController:
                     reachable=True, relay_on=relay_on
                 )
                 self.firebase.set_light_confirmed('lobby', relay_on)
+        threading.Thread(target=_update, daemon=True).start()
+
+    def _on_porch_availability_changed(self, available: bool) -> None:
+        """
+        Handle ESP01-RELAY MQTT availability changes (LWT online / offline).
+
+        Previously this callback was never wired into MqttBridge, so Firebase
+        never learned when the porch relay went offline or came back.  The app
+        therefore either kept showing ONLINE (stale reachable=True) or showed
+        the red dot only after the 3-minute lastSeen timeout expired.
+
+        Now:
+          - "online"  → reachable=True, relay_on=last known state → green dot
+          - "offline" → reachable=False, relay_on=False → red dot immediately
+        """
+        logger.info(f'Porch relay availability: {"online" if available else "offline"}')
+
+        def _update() -> None:
+            if self.firebase:
+                self.firebase.push_porch_relay_status(
+                    reachable=available,
+                    relay_on=self._porch_light_on if available else False,
+                )
         threading.Thread(target=_update, daemon=True).start()
 
     def _on_radar_motion(self, payload: str) -> None:
