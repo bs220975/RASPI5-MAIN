@@ -42,8 +42,8 @@ logger = logging.getLogger(__name__)
 
 # Check for Raspberry Pi GPIO availability
 try:
-    import RPi.GPIO as GPIO
     from gpiozero import DigitalInputDevice
+    import lgpio
     GPIO_AVAILABLE = True
 except ImportError:
     GPIO_AVAILABLE = False
@@ -339,6 +339,7 @@ class GPIOSensorManager(BaseSensor):
         self._pir_sensor = None
         self._reed_sensor = None
         self._initialized = False
+        self._lgpio_handle: Optional[int] = None  # lgpio chip handle for LED + reed
 
         # Callbacks
         self._on_motion: Optional[Callable[[str], None]] = None
@@ -352,8 +353,12 @@ class GPIOSensorManager(BaseSensor):
             return False
 
         try:
-            GPIO.setmode(GPIO.BCM)
-            GPIO.setwarnings(False)
+            # Open lgpio chip — handles LED and reed switch (Pi5-compatible)
+            try:
+                self._lgpio_handle = lgpio.gpiochip_open(0)
+            except Exception as e:
+                logger.warning(f"lgpio chip open failed: {e}")
+                self._lgpio_handle = None
 
             # Initialize sensors with error handling for each
             try:
@@ -374,24 +379,31 @@ class GPIOSensorManager(BaseSensor):
             except Exception as e:
                 logger.warning(f"PIR sensor init failed: {e}")
 
-            # Reed switch: internal pull-up, polled in a daemon thread.
-            # Polling avoids sysfs edge-detect conflicts when the service is
-            # restarted before the previous process released the GPIO.
+            # Reed switch: internal pull-up via lgpio, polled in a daemon thread.
             # pull-up HIGH = door open, LOW = door closed (switch pulls to GND).
+            # If reed is not physically connected the pin stays HIGH (open) silently.
             reed_ok = False
-            try:
-                GPIO.setup(self._config.reed_switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)
-                door_state = "open" if GPIO.input(self._config.reed_switch_pin) else "closed"
-                logger.info(f"Reed switch initialized on GPIO {self._config.reed_switch_pin} — door is {door_state}")
-                reed_ok = True
-            except Exception as e:
-                logger.warning(f"Reed switch init failed: {e}")
+            if self._lgpio_handle is not None:
+                try:
+                    lgpio.gpio_claim_input(
+                        self._lgpio_handle,
+                        self._config.reed_switch_pin,
+                        lgpio.SET_PULL_UP
+                    )
+                    raw = lgpio.gpio_read(self._lgpio_handle, self._config.reed_switch_pin)
+                    door_state = "open" if raw else "closed"
+                    logger.info(f"Reed switch initialized on GPIO {self._config.reed_switch_pin} — door is {door_state}")
+                    reed_ok = True
+                except Exception as e:
+                    logger.warning(f"Reed switch init failed: {e}")
 
-            # Setup LED
-            try:
-                GPIO.setup(self._config.led_pin, GPIO.OUT)
-            except Exception as e:
-                logger.warning(f"LED setup failed: {e}")
+            # Setup LED output via lgpio
+            if self._lgpio_handle is not None:
+                try:
+                    lgpio.gpio_claim_output(self._lgpio_handle, self._config.led_pin, 0)
+                    logger.info(f"LED initialized on GPIO {self._config.led_pin}")
+                except Exception as e:
+                    logger.warning(f"LED setup failed: {e}")
 
             # Must set _initialized=True BEFORE starting the poll thread,
             # because the loop checks `while self._initialized`.
@@ -415,10 +427,11 @@ class GPIOSensorManager(BaseSensor):
         appear as an open immediately followed by a close (or vice versa).
         """
         pin = self._config.reed_switch_pin
+        h = self._lgpio_handle
         DEBOUNCE = 2.0      # seconds new state must be held — rejects sub-2 s EMI bursts
         MIN_INTERVAL = 5.0  # minimum seconds between consecutive door events
         try:
-            stable = GPIO.input(pin)
+            stable = lgpio.gpio_read(h, pin)
         except Exception:
             return
         candidate = stable
@@ -427,7 +440,7 @@ class GPIOSensorManager(BaseSensor):
         while self._initialized:
             time.sleep(0.05)
             try:
-                raw = GPIO.input(pin)
+                raw = lgpio.gpio_read(h, pin)
             except Exception:
                 break
             if raw == stable:
@@ -470,11 +483,12 @@ class GPIOSensorManager(BaseSensor):
     def cleanup(self) -> None:
         """Cleanup GPIO resources. Setting _initialized=False stops the poll loop."""
         self._initialized = False
-        if GPIO_AVAILABLE:
+        if self._lgpio_handle is not None:
             try:
-                GPIO.cleanup()
+                lgpio.gpiochip_close(self._lgpio_handle)
             except Exception as e:
-                logger.error(f"GPIO cleanup error: {e}")
+                logger.error(f"lgpio cleanup error: {e}")
+            self._lgpio_handle = None
         logger.info("GPIO cleanup complete")
 
     @property
@@ -517,18 +531,18 @@ class GPIOSensorManager(BaseSensor):
 
     def read_reed(self) -> bool:
         """Read reed switch state. Returns True if door is open."""
-        if GPIO_AVAILABLE and self._initialized:
+        if self._lgpio_handle is not None and self._initialized:
             try:
-                return bool(GPIO.input(self._config.reed_switch_pin))
+                return bool(lgpio.gpio_read(self._lgpio_handle, self._config.reed_switch_pin))
             except Exception:
                 pass
         return False
 
     def set_led(self, state: bool) -> None:
         """Set status LED state."""
-        if GPIO_AVAILABLE and self._initialized:
+        if self._lgpio_handle is not None and self._initialized:
             try:
-                GPIO.output(self._config.led_pin, state)
+                lgpio.gpio_write(self._lgpio_handle, self._config.led_pin, 1 if state else 0)
             except Exception as e:
                 logger.error(f"LED control error: {e}")
 
