@@ -65,9 +65,9 @@ echo -e "${CYAN}--- Python ---${NC}"
 check "python3 exists"          "command -v python3"
 check "myenv exists"            "[ -d /home/pi5/myenv ]"
 check "pip in myenv"            "[ -f /home/pi5/myenv/bin/pip ]"
-check "paho-mqtt installed"     "source /home/pi5/myenv/bin/activate && python -c 'import paho.mqtt.client'"
-check "influxdb_client installed" "source /home/pi5/myenv/bin/activate && python -c 'import influxdb_client'"
-check "telepot installed"       "source /home/pi5/myenv/bin/activate && python -c 'import telepot'"
+check "paho-mqtt installed"     "/home/pi5/myenv/bin/python -c 'import paho.mqtt.client'"
+check "influxdb_client installed" "/home/pi5/myenv/bin/python -c 'import influxdb_client'"
+check "telepot installed"       "/home/pi5/myenv/bin/python -c 'import telepot'"
 echo ""
 
 # Tools
