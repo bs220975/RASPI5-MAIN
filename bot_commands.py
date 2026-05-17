@@ -65,7 +65,7 @@ class BotCommandHandler:
             '/script_filename': self._cmd_script_filename,
 
             # Video controls
-            '/Enable_botvideo': self._cmd_enable_bot_video,
+            '/enable_botvideo': self._cmd_enable_bot_video,
             '/disable_botvideo': self._cmd_disable_bot_video,
             '/stop_video_rec': self._cmd_stop_video_rec,
             '/start_video_rec': self._cmd_start_video_rec,
@@ -76,7 +76,7 @@ class BotCommandHandler:
 
             # System info
             '/diskuse_status': self._cmd_disk_status,
-            '/raspi_Temprature': self._cmd_temperature,
+            '/raspi_temprature': self._cmd_temperature,
             '/current_time': self._cmd_current_time,
             '/speedtest': self._cmd_speedtest,
 
@@ -90,12 +90,12 @@ class BotCommandHandler:
             '/delete_disk_storage': self._cmd_delete_storage,
 
             # Light controls
-            '/Lobby_Light_On': self._cmd_lobby_light_on,
-            '/Lobby_Light_Off': self._cmd_lobby_light_off,
-            '/Porch_Light_On': self._cmd_porch_light_on,
-            '/Porch_Light_Off': self._cmd_porch_light_off,
-            '/Porch_Light_timer_on': self._cmd_porch_timer_on,
-            '/Porch_Light_timer_off': self._cmd_porch_timer_off,
+            '/lobby_light_on': self._cmd_lobby_light_on,
+            '/lobby_light_off': self._cmd_lobby_light_off,
+            '/porch_light_on': self._cmd_porch_light_on,
+            '/porch_light_off': self._cmd_porch_light_off,
+            '/porch_light_timer_on': self._cmd_porch_timer_on,
+            '/porch_light_timer_off': self._cmd_porch_timer_off,
 
             # ESP controls
             '/reset_esp01_lobby': self._cmd_reset_lobby,
@@ -109,8 +109,8 @@ class BotCommandHandler:
             '/relay_off': self._cmd_relay_off,
 
             # Reed switch
-            '/reed_switch_On': self._cmd_reed_on,
-            '/reed_switch_Off': self._cmd_reed_off,
+            '/reed_switch_on': self._cmd_reed_on,
+            '/reed_switch_off': self._cmd_reed_off,
 
             # System controls
             '/reboot_raspi': self._cmd_reboot,
@@ -143,6 +143,9 @@ class BotCommandHandler:
             if '@' in command_text:
                 command_text = command_text.split('@')[0]
 
+            # Normalize to lowercase so menu taps and manual typing both match
+            command_text = command_text.lower()
+
             self._logger.info(f"Received command: {command_text}")
 
             # Handle /record_video with duration argument
@@ -173,7 +176,7 @@ class BotCommandHandler:
             "/stop_video_rec — Stop sensor recording\n"
             "/start_video_rec — Start sensor recording\n"
             "/disable_botvideo — Disable video to bot\n"
-            "/Enable_botvideo — Enable video to bot\n"
+            "/enable_botvideo — Enable video to bot\n"
             "/record_video &lt;sec&gt; — Record for N seconds\n\n"
 
             "<b>🚶 Sensor Controls</b>\n"
@@ -181,20 +184,20 @@ class BotCommandHandler:
             "/activate_mms_sensor — Enable motion sensor\n\n"
 
             "<b>💡 Lights</b>\n"
-            "/Lobby_Light_On — Lobby light ON\n"
-            "/Lobby_Light_Off — Lobby light OFF\n"
-            "/Porch_Light_On — Porch light ON\n"
-            "/Porch_Light_Off — Porch light OFF\n"
-            "/Porch_Light_timer_on — Porch timer ON\n"
-            "/Porch_Light_timer_off — Porch timer OFF\n\n"
+            "/lobby_light_on — Lobby light ON\n"
+            "/lobby_light_off — Lobby light OFF\n"
+            "/porch_light_on — Porch light ON\n"
+            "/porch_light_off — Porch light OFF\n"
+            "/porch_light_timer_on — Porch timer ON\n"
+            "/porch_light_timer_off — Porch timer OFF\n\n"
 
             "<b>📡 ESP Devices</b>\n"
             "/esp_status_check — Check all ESP devices\n"
             "/reset_esp01_lobby — Reset lobby ESP\n"
             "/reset_esp8266_porch — Reset porch ESP\n"
             "/oled — ESP32 OLED display\n"
-            "/reed_switch_On — Door sensor ON\n"
-            "/reed_switch_Off — Door sensor OFF\n"
+            "/reed_switch_on — Door sensor ON\n"
+            "/reed_switch_off — Door sensor OFF\n"
             "/relay_status — Check ESP01 relay state\n"
             "/relay_on — Turn relay ON\n"
             "/relay_off — Turn relay OFF\n\n"
@@ -210,7 +213,7 @@ class BotCommandHandler:
 
             "<b>📊 System Info</b>\n"
             "/diskuse_status — Disk usage\n"
-            "/raspi_Temprature — CPU temperature\n"
+            "/raspi_temprature — CPU temperature\n"
             "/current_time — Current time\n"
             "/speedtest — Network speed test\n"
             "/system_check — System diagnostics\n"
