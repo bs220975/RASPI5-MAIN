@@ -1,12 +1,12 @@
 # RASPI5-MAIN — Project Reference
 
-Raspberry Pi 4 home automation bridge. Runs as a systemd service (`mybot.service`)
+Raspberry Pi 5 home automation bridge. Runs as a systemd service (`mybot.service`)
 and coordinates local sensors, ESP IoT devices, Firebase RTDB, Telegram, and InfluxDB.
 The Pi is the integration point for relay control and logging. ESP32-RADAR also speaks
 directly to AWS IoT / Firebase / Telegram for security alerts that must survive a Pi outage.
 
 > For OS setup, reimaging, service files, aliases, and Google Drive backup see
-> [`OS_Migration/PROJECT_REFERENCE.md`](OS_Migration/PROJECT_REFERENCE.md).
+> [`OS_Migration_PI5/PROJECT_REFERENCE.md`](OS_Migration_PI5/PROJECT_REFERENCE.md).
 
 ---
 
@@ -18,9 +18,11 @@ directly to AWS IoT / Firebase / Telegram for security alerts that must survive 
   - [ESP32-RADAR: direct cloud paths (Pi-independent)](#esp32-radar--direct-cloud-paths-pi-independent)
   - [Pi / local MQTT paths (Pi-dependent)](#pi--local-mqtt-paths-pi-dependent)
   - [What survives a Pi outage](#what-survives-a-pi-outage)
+- [Dual-Pi Hub IP Architecture](#dual-pi-hub-ip-architecture-keepalived)
 - [MQTT Topics](#mqtt-topics)
   - [Lobby relay — ESP01-LL-RLY](#lobby-relay--esp01-ll-rly-at-192168185)
   - [Porch relay — ESP01-RELAY](#porch-relay--esp01-relay-at-1921681111)
+  - [LP porch relay — ESP32-LP-RLY](#lp-porch-relay--esp32-lp-rly-at-192168189)
   - [Radar sensor — ESP32-RADAR](#radar-sensor--esp32-radar-at-192168187)
   - [DHT11 sensor](#dht11-sensor-on-esp32-radar)
 - [Firebase RTDB Paths](#firebase-rtdb-paths)
@@ -31,6 +33,7 @@ directly to AWS IoT / Firebase / Telegram for security alerts that must survive 
   - [main.py](#mainpy--main-controller-raspberrypicontroller)
   - [mqtt_bridge.py](#mqtt_bridgepy--mqttbridge)
   - [firebase_logger.py](#firebase_loggerpy--firebaselogger)
+  - [bot_commands.py](#bot_commandspy--botcommandhandler)
   - [sensors.py](#sensorspy--sensormanager--gpiomanager--radarsensor)
   - [config.py](#configpy--appconfig-and-sub-configs)
   - [video_recorder.py](#video_recorderpy--videorecorder)
@@ -43,6 +46,7 @@ directly to AWS IoT / Firebase / Telegram for security alerts that must survive 
   - [ESP32-RADAR → porch light](#esp32-radar--porch-light-new--2026-05-14)
   - [App-commanded lobby light](#app-commanded-lobby-light)
   - [App-commanded porch light](#app-commanded-porch-light)
+  - [App-commanded LP porch light (L-Porch-Light)](#app-commanded-lp-porch-light-l-porch-light)
 - [Running the Service](#running-the-service)
 - [Verify MQTT Devices](#verify-mqtt-devices)
 - [Troubleshooting](#troubleshooting)
@@ -61,6 +65,10 @@ directly to AWS IoT / Firebase / Telegram for security alerts that must survive 
 
 | Date | Change |
 |---|---|
+| 2026-05-17 | Add Keepalived VRRP dual-Pi hub IP — both Pi4 and Pi5 run Keepalived; VIP `192.168.1.100` claimed by whichever Pi starts first; automatic failover within ~3 s; `nopreempt` prevents VIP reclaim after recovery |
+| 2026-05-17 | Add `Environment="MQTT_HOST=192.168.1.100"` to `mybot.service` — Pi5 was defaulting MQTT broker to `localhost` (own Mosquitto) instead of hub IP |
+| 2026-05-17 | Fix Firebase LP-RLY SSE stream key `'L-Porch-Light'` → `'lower_porch_light'` in `main.py`; fix confirmed write path in `firebase_logger.py` — LP-RLY switch in app was not responding |
+| 2026-05-17 | Add ESP32-LP-RLY (L-Porch-Light) full integration — `mqtt_bridge.py` subscribes to LP-RLY state / availability / ota/status / telegram; `firebase_logger.py` `push_lp_rly_status()` patches `/devices/ESP32-LP-RLY/` + `lights/lower_porch_light/confirmed`; `main.py` SSE stream on `lights/lower_porch_light/state` with 400 ms debounce |
 | 2026-05-15 | Reed switch false door alerts: raised debounce 0.3 s → 2.0 s, added 5 s MIN_INTERVAL cooldown; root cause is LD2420 EMI on GPIO 26 wire; hardware RC filter recommended (see Troubleshooting) |
 | 2026-05-14 | Created PROJECT_REFERENCE.md |
 | 2026-05-14 | MQTT Option B+C: added porch relay (ESP01-RELAY) + radar motion (ESP32-RADAR) to `mqtt_bridge.py`; night-time relay automation + 5-min off timer in `main.py`; Firebase SSE stream for `lights/lobby`; `push_porch_relay_status()` in `firebase_logger.py`; multi-stream `start_command_stream()` |
@@ -122,9 +130,13 @@ Android App
     │                                            └──► MQTT → home/esp01/lobby/cmd/relay
     │                                                      → ESP01-LL-RLY (lobby light)
     │
-    └── lights/lobby/state  ───────SSE──►  Pi: _on_firebase_porch_light_cmd
-                                               └──► MQTT → home/esp01/porch/cmd/relay
-                                                         → ESP01-RELAY (porch light)
+    ├── lights/lobby/state  ───────SSE──►  Pi: _on_firebase_porch_light_cmd
+    │                                          └──► MQTT → home/esp01/porch/cmd/relay
+    │                                                    → ESP01-RELAY (porch light)
+    │
+    └── lights/lower_porch_light/state  ─SSE──►  Pi: _on_firebase_lp_rly_cmd
+                                                      └──► MQTT → home/switches/L-Porch-Light/cmd
+                                                                → ESP32-LP-RLY (LP porch light)
 
 ESP32-RADAR (motion sensor) — also publishes via local MQTT for relay control:
     └── MQTT home/esp32/radar2/motion  ──►  Pi: _on_radar_motion
@@ -141,6 +153,15 @@ ESP01-RELAY (porch relay)
                                               └── Firebase PATCH /devices/esp01_relay/
                                                   lights/lobby/confirmed
 
+ESP32-LP-RLY (LP porch relay)
+    ├── MQTT home/switches/L-Porch-Light/state  ──►  Pi: _on_lp_rly_mqtt_state
+    │                                                     └── Firebase PATCH /devices/ESP32-LP-RLY/
+    │                                                         lights/lower_porch_light/confirmed
+    ├── MQTT home/switches/L-Porch-Light/availability  ──►  Pi: _on_lp_rly_availability_changed
+    │                                                            └── Firebase PATCH /devices/ESP32-LP-RLY/
+    ├── MQTT home/esp32/lp-rly/ota/status  ──►  Pi: _on_lp_rly_ota_status → Telegram
+    └── MQTT home/esp32/lp-rly/telegram   ──►  Pi: _on_lp_rly_telegram → Telegram
+
 Pi local sensors (GPIO)
     ├── LD2420 radar → _process_motion → _trigger_light_control (lobby light, night only)
     │                                  → video recording → Telegram send_video
@@ -149,7 +170,7 @@ Pi local sensors (GPIO)
     └── Reed switch (GPIO 26) → _on_door_open / _on_door_close → Telegram alert
 
 Pi → Firebase heartbeat (every 60 s)
-    └── PATCH /devices/RASPI-4/ {cpuTemp, uptime, motionDetected, recording}
+    └── PATCH /devices/RASPI-5/ {cpuTemp, uptime, motionDetected, recording}
 ```
 
 ### What survives a Pi outage
@@ -162,7 +183,45 @@ Pi → Firebase heartbeat (every 60 s)
 | App bulb state (lobby) | ✅ ESP32 → Firebase RTDB direct |
 | Porch relay (motion triggered) | ❌ Pi required (MQTT path) |
 | App lobby/porch switch | ❌ Pi required (Firebase SSE → MQTT) |
+| App L-Porch-Light switch | ❌ Pi required (Firebase SSE → MQTT) |
 | DHT11 temperature logging | ❌ Pi required |
+| Hub IP failover | ✅ Keepalived — other Pi claims 192.168.1.100 within ~3 s |
+
+---
+
+## Dual-Pi Hub IP Architecture (Keepalived)
+
+Both Pi4 (`192.168.1.122`) and Pi5 (`192.168.1.108`) run `keepalived` VRRP.
+The virtual IP `192.168.1.100` floats between them — whichever starts first claims it as MASTER.
+
+```
+Pi4 (192.168.1.122)  ─┐
+                       ├── Keepalived VRRP ──► Hub IP 192.168.1.100
+Pi5 (192.168.1.108)  ─┘                         │
+                                                 └── Mosquitto broker
+                                                     ESP devices connect here
+```
+
+**Failover behaviour:**
+- Both Pis start as `BACKUP` (`nopreempt`). Whichever advertises first becomes `MASTER`.
+- If the MASTER Pi's Keepalived stops (Pi shutdown / reboot), VIP migrates to the other Pi within ~3 s.
+- `nopreempt` — recovered Pi rejoins as BACKUP; does not reclaim VIP automatically.
+- `mybot.service` health-check: if mybot stops, Pi's priority drops 100 → 80. Other Pi takes VIP only if it holds a higher effective priority (only matters when both Keepaliveds are running simultaneously).
+
+**MQTT broker:**
+- `mybot.service` reads `MQTT_HOST` env var → defaults to `192.168.1.100`
+- All ESP devices connect MQTT broker at `192.168.1.100:1883`
+- Both Pis run Mosquitto locally — whichever holds the VIP receives ESP device connections
+
+**Keepalived commands:**
+```bash
+sudo systemctl status keepalived
+sudo systemctl start keepalived
+sudo systemctl stop keepalived
+ip addr show wlan0 | grep 192.168.1.100   # check if this Pi holds VIP
+```
+
+**Config:** `OS_Migration_PI5/keepalived/keepalived.conf` → deploy to `/etc/keepalived/keepalived.conf`
 
 ---
 
@@ -184,6 +243,18 @@ Pi → Firebase heartbeat (every 60 s)
 | `home/esp01/porch/state` | Device → Pi | 1 | Yes | `ON` / `OFF` |
 | `home/esp01/porch/availability` | Device → Pi | 1 | Yes | `online` / `offline` |
 
+### LP porch relay — ESP32-LP-RLY at 192.168.1.89
+
+| Topic | Direction | QoS | Retained | Payload |
+|---|---|---|---|---|
+| `home/switches/L-Porch-Light/cmd` | Pi → device | 1 | No | `ON` / `OFF` |
+| `home/switches/L-Porch-Light/state` | Device → Pi | 1 | Yes | `ON` / `OFF` |
+| `home/switches/L-Porch-Light/state/json` | Device → Pi | 0 | Yes | JSON `{switch, state, device, ip, rssi, uptime_s, free_heap}` |
+| `home/switches/L-Porch-Light/availability` | Device → Pi (LWT) | 1 | Yes | `online` / `offline` |
+| `home/esp32/lp-rly/ota/cmd` | App → device | 0 | No | JSON `{action:"start_ota", url, version}` |
+| `home/esp32/lp-rly/ota/status` | Device → Pi | 0 | Yes | JSON `{device, status, progress, version, message}` |
+| `home/esp32/lp-rly/telegram` | Device → Pi | 0 | No | Plain text — Pi forwards to Telegram |
+
 ### Radar sensor — ESP32-RADAR at 192.168.1.87
 
 | Topic | Direction | QoS | Retained | Payload |
@@ -197,7 +268,7 @@ Pi → Firebase heartbeat (every 60 s)
 |---|---|---|
 | `DHT11` | Device → Pi | JSON `{temp, humidity}` |
 
-**Broker:** Mosquitto on Pi — `localhost:1883`, credentials `mq / mq`
+**Broker:** Mosquitto on hub IP `192.168.1.100:1883`, credentials `mq / mq` (Keepalived VIP floats between Pi4 and Pi5)
 
 ---
 
@@ -209,12 +280,15 @@ Database: `https://home-security-app-555cf-default-rtdb.asia-southeast1.firebase
 
 | Path | Trigger | Fields |
 |---|---|---|
-| `/devices/RASPI-4/` | Every 60 s heartbeat | `lastSeen`, `reachable`, `cpuTemp`, `uptime`, `motionDetected`, `recording` |
+| `/devices/RASPI-5/` | Every 60 s heartbeat | `lastSeen`, `reachable`, `cpuTemp`, `uptime`, `motionDetected`, `recording` |
 | `/devices/ESP01-LL-RLY/` | MQTT lobby state + relay heartbeat poll | `lastSeen`, `reachable`, `relayState` |
 | `/devices/esp01_relay/` | MQTT porch state | `lastSeen`, `reachable`, `relayState` |
+| `/devices/ESP32-LP-RLY/` | MQTT LP-RLY state + availability | `lastSeen`, `reachable`, `relayState`, `switchName` |
 | `/lights/live/` | Pi radar motion changes | `motionDetected`, `lastUpdate` |
 | `/lights/living_room/confirmed` | After lobby relay MQTT state arrives | `bool` |
 | `/lights/lobby/confirmed` | After porch relay MQTT state arrives | `bool` |
+| `/lights/lower_porch_light/confirmed` | After LP-RLY MQTT state arrives | `bool` |
+| `/lights/lower_porch_light/lastUpdate` | After LP-RLY MQTT state arrives | Unix ms |
 
 ### Read by Pi (SSE streams)
 
@@ -222,6 +296,7 @@ Database: `https://home-security-app-555cf-default-rtdb.asia-southeast1.firebase
 |---|---|---|
 | `/lights/living_room/state` | `_on_firebase_light_cmd` | → MQTT lobby relay ON/OFF |
 | `/lights/lobby/state` | `_on_firebase_porch_light_cmd` | → MQTT porch relay ON/OFF |
+| `/lights/lower_porch_light/state` | `_on_firebase_lp_rly_cmd` | → MQTT LP-RLY ON/OFF |
 
 ### Written directly by ESP32-RADAR (Pi-down resilience)
 
@@ -248,31 +323,45 @@ Database: `https://home-security-app-555cf-default-rtdb.asia-southeast1.firebase
 **Firebase SSE callbacks:**
 - `_on_firebase_light_cmd(cmd)` — debounced 400 ms → `_execute_light_cmd` → MQTT lobby relay
 - `_on_firebase_porch_light_cmd(cmd)` — debounced 400 ms → `_execute_porch_cmd` → MQTT porch relay
+- `_on_firebase_lp_rly_cmd(cmd)` — debounced 400 ms → `_execute_lp_rly_cmd` → MQTT LP-RLY relay
+
+**ESP32-LP-RLY callbacks:**
+- `_on_lp_rly_mqtt_state(payload)` — updates `/devices/ESP32-LP-RLY/` + `lights/lower_porch_light/confirmed`
+- `_on_lp_rly_availability_changed(available)` — updates `/devices/ESP32-LP-RLY/reachable` immediately on LWT
+- `_on_lp_rly_ota_status(payload)` — parses OTA progress JSON → sends to Telegram
+- `_on_lp_rly_telegram(message)` — forwards plain-text MQTT message to Telegram
 
 **Door callbacks:**
 - `_on_door_open()` / `_on_door_close()` — Telegram alert with timestamp
 
 **Heartbeats:**
 - `_poll_relay_heartbeat()` — every 120 s, GET ESP01-LL-RLY `/status` → Firebase
-- `_push_firebase_status()` — every 60 s → `/devices/RASPI-4/`
+- `_push_firebase_status()` — every 60 s → `/devices/RASPI-5/`
 
 ---
 
 ### `mqtt_bridge.py` — `MqttBridge`
 
-Single paho MQTT client session against local Mosquitto.
+Single paho MQTT client session against hub IP Mosquitto (`192.168.1.100:1883`).
 
 **Publishes:**
 - `send_lobby_relay(state)` → `home/esp01/lobby/cmd/relay`
 - `send_porch_relay(state)` → `home/esp01/porch/cmd/relay`
+- `send_lp_rly_relay(state)` → `home/switches/L-Porch-Light/cmd`
 
 **Subscribes** (registered in `_on_connect`):
-- All 6 state/availability topics for lobby relay, porch relay, and radar sensor
+- Lobby relay: state + availability
+- Porch relay: state + availability
+- LP porch relay: state + availability + ota/status + telegram
+- Radar: motion + availability
 
 **Callbacks injected at construction:**
 - `on_lobby_state`, `on_lobby_availability`
 - `on_porch_state`, `on_porch_availability`
+- `on_lp_rly_state`, `on_lp_rly_availability`, `on_lp_rly_ota_status`, `on_lp_rly_telegram`
 - `on_radar_motion`, `on_radar_availability`
+
+**Availability flags reset on disconnect:** `_lobby_available`, `_porch_available`, `_lp_rly_available` — all set to `False` in `_on_disconnect`.
 
 Auto-reconnect via paho `reconnect_delay_set(5, 60)`.
 
@@ -283,16 +372,39 @@ Auto-reconnect via paho `reconnect_delay_set(5, 60)`.
 Pure HTTPS REST to Firebase RTDB (no auth — database rules allow public write).
 
 **Write methods:**
-- `push_pi_status(motion, recording)` — RASPI-4 heartbeat + `lights/live/`
+- `push_pi_status(motion, recording)` — RASPI-5 heartbeat + `lights/live/`
 - `push_lobby_relay_status(reachable, relay_on)` — `/devices/ESP01-LL-RLY/`
 - `push_porch_relay_status(reachable, relay_on)` — `/devices/esp01_relay/`
+- `push_lp_rly_status(reachable, relay_on)` — `/devices/ESP32-LP-RLY/` + `lights/lower_porch_light/confirmed`
 - `set_light_confirmed(light_id, confirmed)` — `lights/{light_id}/confirmed`
-- `mark_offline()` — sets `RASPI-4/reachable = false` on shutdown
+- `mark_offline()` — sets `RASPI-5/reachable = false` on shutdown
 
 **SSE streams (multiple concurrent, keyed by `light_id`):**
 - `start_command_stream(light_id, callback)` — streams `lights/{light_id}/state`
-- Currently active: `living_room` and `lobby`
+- Currently active: `living_room`, `lobby`, and `lower_porch_light`
 - `stop_command_stream()` — stops all streams
+
+---
+
+### `bot_commands.py` — `BotCommandHandler`
+
+Handles all incoming Telegram bot commands. Commands are registered as a lowercase dict
+keyed by `/command`. `handle_message` normalizes all incoming text to lowercase before
+lookup so menu taps (Telegram sends lowercase) and manually-typed commands (any case)
+both match.
+
+**Log file paths** (used by `/get_error_log`, `/get_service_log`, `/clear_logs`):
+
+| Key | Path |
+|---|---|
+| `error` | `/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/error_log.txt` |
+| `service` | `/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Output_mybot_service.log` |
+| `stderr` | `/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Error_mybot_service.log` |
+
+**Commands that control LP porch light via HTTP fallback** (bypass MQTT):
+`/porch_light_on` and `/porch_light_off` call `esp_devices.porch_light_on/off()` → HTTP
+to `192.168.1.89:1089/lighton|lightoff`. The ESP32-LP-RLY then publishes MQTT state,
+so Firebase still gets updated via the normal MQTT confirmation path.
 
 ---
 
@@ -313,7 +425,7 @@ Pure HTTPS REST to Firebase RTDB (no auth — database rules allow public write)
 | Class | Key settings |
 |---|---|
 | `TelegramConfig` | `bot_token`, `chat_id` |
-| `MqttConfig` | `host=localhost`, `port=1883`, `username=mq`, `password=mq`, `client_id=raspi4-bridge` |
+| `MqttConfig` | `host` from `MQTT_HOST` env (defaults to `192.168.1.100`), `port=1883`, `username=mq`, `password=mq`, `client_id=raspi5-bridge` |
 | `FirebaseConfig` | `database_url`, `heartbeat_interval=60` |
 | `GPIOConfig` | `mms=27`, `pir=25`, `led=18`, `reed_switch=26` |
 | `VideoConfig` | `bitrate=1_000_000`, `max_duration=120`, `motion_timeout=10`, `min_duration=10` |
@@ -403,6 +515,15 @@ exclusively via MQTT, with its own HTTP fallback to ESP32-RADAR handled on-devic
 - Same debounce + dedup pattern
 - MQTT only (no HTTP fallback from Pi — ESP01-RELAY handles its own HTTP fallback)
 
+### App-commanded LP porch light (L-Porch-Light)
+- Firebase SSE on `lights/lower_porch_light/state` → `_on_firebase_lp_rly_cmd`
+- 400 ms debounce + dedup (skips if same state as last executed)
+- MQTT publish `home/switches/L-Porch-Light/cmd` → ESP32-LP-RLY (192.168.1.89)
+- Confirmation arrives via MQTT `state` topic → `_on_lp_rly_mqtt_state`
+  → Firebase PATCH `lights/lower_porch_light/confirmed` + `/devices/ESP32-LP-RLY/`
+- ESP32-LP-RLY has a built-in 3-minute auto-off — when it fires it publishes `state=OFF`
+  back via MQTT, which the Pi relays to Firebase so the app switch turns off automatically
+
 ---
 
 ## Running the Service
@@ -417,8 +538,8 @@ journalctl -u mybot.service -f
 servicemybot   # alias
 
 # Run manually (debug)
-cd /home/pi/pi4_drive/Git_projects/RASPI5-MAIN
-source /home/pi/myenv/bin/activate
+cd /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN
+source /home/pi5/myenv/bin/activate
 python3 main.py
 ```
 
@@ -428,20 +549,27 @@ python3 main.py
 
 ```bash
 # Subscribe to all managed topics
-mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/#" -v
+mosquitto_sub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/#" -v
 
 # Check lobby relay
-mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/#" -v -W 5
+mosquitto_sub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/esp01/lobby/#" -v -W 5
 
 # Check porch relay
-mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp01/porch/#" -v -W 5
+mosquitto_sub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/esp01/porch/#" -v -W 5
 
 # Check radar motion
-mosquitto_sub -h localhost -p 1883 -u mq -P mq -t "home/esp32/radar2/#" -v -W 5
+mosquitto_sub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/esp32/radar2/#" -v -W 5
+
+# Check LP porch relay (ESP32-LP-RLY)
+mosquitto_sub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/switches/L-Porch-Light/#" -t "home/esp32/lp-rly/#" -v -W 5
 
 # Manually command porch relay
-mosquitto_pub -h localhost -p 1883 -u mq -P mq -t "home/esp01/porch/cmd/relay" -m "ON"
-mosquitto_pub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/cmd/relay" -m "ON"
+mosquitto_pub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/esp01/porch/cmd/relay" -m "ON"
+mosquitto_pub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/esp01/lobby/cmd/relay" -m "ON"
+
+# Manually command LP porch relay
+mosquitto_pub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/switches/L-Porch-Light/cmd" -m "ON"
+mosquitto_pub -h 192.168.1.100 -p 1883 -u mq -P mq -t "home/switches/L-Porch-Light/cmd" -m "OFF"
 ```
 
 ---
@@ -455,12 +583,16 @@ mosquitto_pub -h localhost -p 1883 -u mq -P mq -t "home/esp01/lobby/cmd/relay" -
 | Motion video not sent to Telegram | Check camera initialized (log: `Camera initialized successfully`); check disk space |
 | Reed switch not firing | Check GPIO 26 wiring — one leg to GPIO 26, other to GND. Check log for "Reed switch initialized" |
 | False Door OPENED / CLOSED Telegram alerts (no activity) | **Exact problem:** LD2420 radar (~10 cm from Pi) was making GPIO 26 go HIGH — which the code reads as "door open" — even though the door was shut and the magnet was holding the reed switch closed (pin should be LOW). The RF burst would eventually end, pin returned LOW, triggering a fake "door closed". Result: paired false alerts every few minutes with no one near the door. **Root cause:** Reed switch wiring (pull-up HIGH = open, LOW = closed). LD2420 24 GHz RF coupled into the GPIO 26 wire acting as an antenna and forced the pin HIGH. **Software fix (applied):** debounce raised to 2.0 s, 5 s cooldown between events (`sensors.py _reed_poll_loop`). Suppressed events log `WARNING Reed: state change suppressed`. **Permanent hardware fix:** add 10 kΩ series resistor between reed switch and GPIO 26, plus 100 nF capacitor from GPIO 26 to GND — RC low-pass filter (~160 Hz cutoff) blocks RF before it reaches the pin. Also: move LD2420 ≥ 30 cm from the Pi, or add a ferrite bead on the reed switch wire. |
-| MQTT bridge reconnecting constantly | Check Mosquitto running (`statusmqtt`); check credentials `mq/mq`; check `localhost:1883` |
+| MQTT bridge reconnecting constantly | Check Mosquitto running on VIP holder (`statusmqtt`); check credentials `mq/mq`; check `192.168.1.100:1883`; check which Pi holds VIP with `ip addr show wlan0 \| grep 192.168.1.100` |
 | `_on_porch_mqtt_state` not firing | Check ESP01-RELAY online (`home/esp01/porch/availability`); check firmware has MQTT |
 | Porch light stays on after dawn | 5-min off timer only fires on `motion=OFF` from radar; check ESP32-RADAR is publishing MQTT |
 | Firebase writes failing | Check internet connectivity; Firebase RTDB rules allow public write on `devices/`, `lights/` |
 | `mybot.service` crash-looping | Check `logs/error_log.txt`; check GPIO conflicts; check sensor hardware connected |
-| `start_command_stream` logs two streams | Expected — `living_room` and `lobby` both start on init |
+| `start_command_stream` logs three streams | Expected — `living_room`, `lobby`, and `lower_porch_light` all start on init |
+| LP porch switch does nothing | Check `L-Porch-Light/availability = online`; check Pi MQTT bridge connected to hub IP; check Firebase SSE stream for `lower_porch_light` started in log |
+| LP porch switch shows wrong state / no confirm | Check `_on_lp_rly_mqtt_state` firing in log; check Firebase PATCH `lights/lower_porch_light/confirmed` succeeding |
+| Pi5 not receiving MQTT from ESPs | Check `MQTT_HOST` in `/etc/systemd/system/mybot.service` is `192.168.1.100`; `grep MQTT_HOST /etc/systemd/system/mybot.service` |
+| VIP not failing over | Both Pis must have keepalived running (`sudo systemctl status keepalived`); check both configs have same `virtual_router_id 51` and `auth_pass pihub123` |
 
 ---
 

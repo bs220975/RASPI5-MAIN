@@ -9,6 +9,7 @@
 
 | Date | Changes |
 |---|---|
+| 2026-05-17 | Added Keepalived VRRP for dual-Pi hub IP failover. `keepalived` service added to Services table. `mybot.service` updated with `MQTT_HOST=192.168.1.100`. Added ESP32-LP-RLY to credentials table. |
 | 2026-05-15 | OS_Migration_PI5 created from Pi4 migration infrastructure. All paths, user, hostname updated for Pi5 (pi5 / pi5 / 192.168.1.108). |
 
 ---
@@ -40,10 +41,12 @@
 | Raspberry Pi 5 LAN IP | `192.168.1.108` |
 | Hostname | `pi5` |
 | Username | `pi5` |
-| Mosquitto broker | `localhost:1883` |
+| Hub IP (Keepalived VIP) | `192.168.1.100` — floats between Pi4 and Pi5 |
+| Mosquitto broker (MQTT_HOST) | `192.168.1.100:1883` (hub IP) |
 | Mosquitto credentials | `mq / mq` |
 | ESP01-LL-RLY static IP | `192.168.1.85` |
 | ESP01-RELAY (porch) static IP | `192.168.1.111` |
+| ESP32-LP-RLY (LP porch) static IP | `192.168.1.89` |
 | ESP32-RADAR static IP | `192.168.1.87` |
 | Firebase RTDB URL | `https://home-security-app-555cf-default-rtdb.asia-southeast1.firebasedatabase.app` |
 | RASPI5-MAIN repo | `https://github.com/bs220975/RASPI5-MAIN` — branch `main` |
@@ -103,6 +106,7 @@ RASPI5-MAIN/
 |---|---|---|---|
 | `mybot.service` | `RASPI5-MAIN/main.py` | YES | `always` — 5 crashes in 5 min → Pi reboots |
 | `mqttdatainflux.service` | `RASPI5-MAIN/influx_aws_publish/influxdb2_aws_publish.py` | YES | `on-failure` — max 1 restart per 5 min |
+| `keepalived` | VRRP hub IP failover — holds/releases `192.168.1.100` | YES | system default |
 | `mybot2.service` | (secondary service) | NO | manual enable only if needed |
 | `mosquitto` | MQTT broker port 1883 | YES | system default |
 | `influxdb` | InfluxDB 2.x port 8086 | YES | system default |
@@ -371,14 +375,16 @@ gdrive:/
 
 | Problem | Fix |
 |---|---|
-| `mqttdatainflux` crashes at boot | AWS certs missing — restore from `gdrive:/pi5_backups/` |
+| `mqttdatainflux` crashes at boot | AWS certs missing — restore from `gdrive:/pi5_backups/`. If `StandardError` log dir missing, create `logs/` folder and restart |
 | `mybot` not connecting | Check `config.py` Telegram token and chat ID |
 | Aliases not working | Run `source ~/.bashrc` or re-login |
 | Drive sync fails | Run `rclone config` to re-authenticate |
 | InfluxDB not found | `which influx` — if missing, re-run Step 8 manually |
 | 32-bit OS flashed by mistake | `getconf LONG_BIT` → should return `64` |
 | Reed switch false alerts | See root PROJECT_REFERENCE.md — EMI issue, RC filter fix documented there |
-| MQTT bridge reconnecting | Check Mosquitto running (`statusmqtt`); check credentials `mq/mq`; check `localhost:1883` |
+| MQTT bridge reconnecting | Check which Pi holds hub IP (`ip addr show wlan0 \| grep 192.168.1.100`); check Mosquitto running on that Pi; check credentials `mq/mq` |
+| Pi5 not receiving MQTT from ESPs | Check `MQTT_HOST=192.168.1.100` in `/etc/systemd/system/mybot.service`; run `grep MQTT_HOST /etc/systemd/system/mybot.service` |
+| Pi not holding hub IP after reimage | Install and enable keepalived: `sudo apt install keepalived`, copy `OS_Migration_PI5/keepalived/keepalived.conf` to `/etc/keepalived/`, `sudo systemctl enable --now keepalived` |
 
 ---
 
