@@ -699,7 +699,7 @@ class RaspberryPiController:
         """
         Handle ESP32-LP-RLY relay state arriving over MQTT.
 
-        Updates /devices/ESP32-LP-RLY/ and lights/L-Porch-Light/confirmed
+        Updates /devices/ESP32-LP-RLY/ and lights/lower_porch_light/confirmed
         so the app switch reflects the actual physical relay state.
         """
         relay_on = payload.upper() == 'ON'
