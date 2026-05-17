@@ -148,10 +148,10 @@ class FirebaseLogger:
         relay_on: bool,
     ) -> bool:
         """
-        Update /devices/ESP8266-LP-RLY/ with the LP porch relay status.
+        Update /devices/ESP32-LP-RLY/ with the LP porch relay status.
 
         Called whenever the Pi receives state or availability from the
-        ESP8266-LP-RLY (192.168.1.89) via MQTT topic
+        ESP32-LP-RLY (192.168.1.89) via MQTT topic
         home/switches/L-Porch-Light/state or .../availability.
         The app reads this node to show the L-Porch-Light switch status.
         """
@@ -161,7 +161,7 @@ class FirebaseLogger:
             'relayState': relay_on,
             'switchName': 'L-Porch-Light',
         }
-        ok = self._patch('devices/ESP8266-LP-RLY', data)
+        ok = self._patch('devices/ESP32-LP-RLY', data)
         # Mirror confirmed state so the app switch reflects physical state
         self._patch('lights/L-Porch-Light', {'confirmed': relay_on, 'lastUpdate': _ms_now()})
         return ok

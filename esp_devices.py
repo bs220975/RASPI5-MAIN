@@ -97,7 +97,34 @@ class ESPDeviceManager:
                 if response.status_code == 200:
                     data = response.json()
 
-                    wifi_signal_dbm = data.get("wifi_signal_dBm")
+                    # Support both old format (wifi_signal_dBm, ip_address, wifi_status,
+                    # internet_status) and new ESP32 format (rssi, ip, mqtt, has_internet).
+                    ip_address = (data.get("ip_address") or data.get("ip")
+                                  or device_ip.split(':')[0])
+                    port = (data.get("port")
+                            or (device_ip.split(':')[1] if ':' in device_ip else "80"))
+
+                    wifi_signal_dbm = data.get("wifi_signal_dBm") or data.get("rssi")
+
+                    wifi_status = data.get("wifi_status")
+                    if wifi_status is None:
+                        ssid = data.get("ssid")
+                        mqtt_state = data.get("mqtt")
+                        if ssid:
+                            wifi_status = ssid
+                        elif mqtt_state:
+                            wifi_status = f"MQTT:{mqtt_state}"
+                        else:
+                            wifi_status = "Unknown"
+
+                    internet_status = data.get("internet_status")
+                    if internet_status is None:
+                        has_internet = data.get("has_internet")
+                        if has_internet is not None:
+                            internet_status = "Connected" if has_internet else "No Internet"
+                        else:
+                            internet_status = "Unknown"
+
                     wifi_signal_percent = 0
                     if wifi_signal_dbm is not None:
                         try:
@@ -109,10 +136,10 @@ class ESPDeviceManager:
 
                     return ESPDeviceStatus(
                         name=device_name,
-                        ip_address=data.get("ip_address", device_ip.split(':')[0]),
-                        port=data.get("port", device_ip.split(':')[1] if ':' in device_ip else "80"),
-                        wifi_status=data.get("wifi_status", "Unknown"),
-                        internet_status=data.get("internet_status", "Unknown"),
+                        ip_address=ip_address,
+                        port=port,
+                        wifi_status=wifi_status,
+                        internet_status=internet_status,
                         wifi_signal_dbm=wifi_signal_dbm,
                         wifi_signal_percent=wifi_signal_percent,
                         is_connected=True
@@ -195,8 +222,8 @@ class ESPDeviceManager:
         return self.send_command('ESP01_Lobby', command)
 
     def send_to_porch(self, command: str = "motion") -> Tuple[bool, str]:
-        """Send command to ESP8266-LP-RLY porch device"""
-        return self.send_command('ESP8266_LP_RLY', command)
+        """Send command to ESP32-LP-RLY porch device"""
+        return self.send_command('ESP32_LP_RLY', command)
 
     def send_to_oled(self, command: str = "oled") -> Tuple[bool, str]:
         """Send command to ESP32 OLED device"""
@@ -215,11 +242,11 @@ class ESPDeviceManager:
         return self.send_to_lobby("lightoff")
 
     def porch_light_on(self) -> Tuple[bool, str]:
-        """Turn on LP porch light (ESP8266-LP-RLY)"""
+        """Turn on LP porch light (ESP32-LP-RLY)"""
         return self.send_to_porch("lighton")
 
     def porch_light_off(self) -> Tuple[bool, str]:
-        """Turn off LP porch light (ESP8266-LP-RLY)"""
+        """Turn off LP porch light (ESP32-LP-RLY)"""
         return self.send_to_porch("lightoff")
 
     def get_relay_state(self) -> Optional[str]:

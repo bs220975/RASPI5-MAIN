@@ -115,7 +115,7 @@ class RaspberryPiController:
         self._last_porch_cmd: Optional[bool] = None
         self._porch_cmd_timer: Optional[threading.Timer] = None
 
-        # LP porch relay state (ESP8266-LP-RLY / L-Porch-Light app switch)
+        # LP porch relay state (ESP32-LP-RLY / L-Porch-Light app switch)
         self._lp_rly_light_on: bool = False
         self._last_lp_rly_cmd: Optional[bool] = None
         self._lp_rly_cmd_timer: Optional[threading.Timer] = None
@@ -252,6 +252,8 @@ class RaspberryPiController:
                 on_porch_availability=self._on_porch_availability_changed,
                 on_lp_rly_state=self._on_lp_rly_mqtt_state,
                 on_lp_rly_availability=self._on_lp_rly_availability_changed,
+                on_lp_rly_ota_status=self._on_lp_rly_ota_status,
+                on_lp_rly_telegram=self._on_lp_rly_telegram,
                 on_radar_motion=self._on_radar_motion,
             )
             if self.mqtt_bridge.start():
@@ -690,14 +692,14 @@ class RaspberryPiController:
             logger.warning(f'Porch command execute error: {e}')
 
     # ------------------------------------------------------------------
-    # ESP8266-LP-RLY (L-Porch-Light) callbacks
+    # ESP32-LP-RLY (L-Porch-Light) callbacks
     # ------------------------------------------------------------------
 
     def _on_lp_rly_mqtt_state(self, payload: str) -> None:
         """
-        Handle ESP8266-LP-RLY relay state arriving over MQTT.
+        Handle ESP32-LP-RLY relay state arriving over MQTT.
 
-        Updates /devices/ESP8266-LP-RLY/ and lights/L-Porch-Light/confirmed
+        Updates /devices/ESP32-LP-RLY/ and lights/L-Porch-Light/confirmed
         so the app switch reflects the actual physical relay state.
         """
         relay_on = payload.upper() == 'ON'
@@ -711,7 +713,7 @@ class RaspberryPiController:
 
     def _on_lp_rly_availability_changed(self, available: bool) -> None:
         """
-        Handle ESP8266-LP-RLY MQTT LWT (online / offline).
+        Handle ESP32-LP-RLY MQTT LWT (online / offline).
 
         Immediately marks the Firebase device node reachable/unreachable
         so the app switch shows the correct dot colour without waiting.
@@ -731,7 +733,7 @@ class RaspberryPiController:
         Handle an L-Porch-Light command from the Firebase SSE stream.
 
         Debounces rapid bursts (Firebase reconnect replays), then sends
-        the final ON/OFF to ESP8266-LP-RLY via MQTT.
+        the final ON/OFF to ESP32-LP-RLY via MQTT.
         """
         logger.info(f'Firebase stream: L-Porch-Light {"ON" if cmd else "OFF"}')
 
@@ -758,6 +760,32 @@ class RaspberryPiController:
                 # Confirmation arrives via MQTT state → _on_lp_rly_mqtt_state
         except Exception as e:
             logger.warning(f'LP-RLY command execute error: {e}')
+
+    def _on_lp_rly_ota_status(self, payload: str) -> None:
+        """Forward ESP32-LP-RLY OTA progress JSON to Telegram."""
+        try:
+            import json as _json
+            data = _json.loads(payload)
+            status   = data.get('status', '')
+            version  = data.get('version', '')
+            progress = data.get('progress', '')
+            message  = data.get('message', '')
+            text = f"LP-RLY OTA [{status}] v{version} {progress}% — {message}".strip(' —')
+            logger.info(f'LP-RLY OTA: {text}')
+            if self.telegram:
+                threading.Thread(
+                    target=self.telegram.send_text, args=(text,), daemon=True
+                ).start()
+        except Exception as e:
+            logger.warning(f'LP-RLY OTA status parse error: {e}  raw={payload}')
+
+    def _on_lp_rly_telegram(self, message: str) -> None:
+        """Forward a Telegram message published by ESP32-LP-RLY firmware."""
+        logger.info(f'LP-RLY telegram: {message}')
+        if self.telegram:
+            threading.Thread(
+                target=self.telegram.send_text, args=(message,), daemon=True
+            ).start()
 
     def _push_firebase_status(self) -> None:
         """Push current Pi status snapshot to Firebase."""
