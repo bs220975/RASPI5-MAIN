@@ -64,7 +64,6 @@ class VideoRecorder:
     def __init__(self, config: VideoConfig):
         self.config = config
         self._camera = None
-        self._encoder = None
         self._state = RecordingState.IDLE
         self._current_file_path: Optional[str] = None
         self._recording_start_time: float = 0
@@ -87,9 +86,13 @@ class VideoRecorder:
         try:
             with self._camera_lock:
                 self._camera = Picamera2()
-                video_config = self._camera.create_video_configuration()
+                # Pi 5 (PiSP/RP1) requires an explicit resolution — full sensor
+                # resolution (4608x2592) causes "Failed to start media pipeline: -32"
+                video_config = self._camera.create_video_configuration(
+                    main={"size": (1920, 1080)},
+                    buffer_count=6
+                )
                 self._camera.configure(video_config)
-                self._encoder = H264Encoder(bitrate=self.config.bitrate)
                 time.sleep(0.15)
 
             self._logger.info("Camera initialized successfully")
@@ -98,7 +101,6 @@ class VideoRecorder:
         except Exception as e:
             self._logger.error(f"Camera initialization error: {e}")
             self._camera = None
-            self._encoder = None
             return False
 
     def close(self) -> None:
@@ -113,7 +115,6 @@ class VideoRecorder:
                     self._logger.error(f"Error closing camera: {e}")
                 finally:
                     self._camera = None
-                    self._encoder = None
                     self._state = RecordingState.IDLE
 
     def set_callbacks(
@@ -204,7 +205,10 @@ class VideoRecorder:
                 if not self._camera:
                     raise RuntimeError("Camera not initialized")
 
-                self._camera.start_recording(self._encoder, h264_file)
+                # Create a fresh encoder for each recording — reusing a stopped
+                # encoder causes "Broken pipe" on Pi 5 (no hardware H264 encoder)
+                encoder = H264Encoder(bitrate=self.config.bitrate)
+                self._camera.start_recording(encoder, h264_file)
                 self._state = RecordingState.RECORDING
                 self._recording_start_time = start_time
 

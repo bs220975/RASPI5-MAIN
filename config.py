@@ -1,5 +1,5 @@
 """
-Configuration Module for Raspberry Pi 4 Home Automation System
+Configuration Module for Raspberry Pi 5 Home Automation System
 
 This module provides centralized configuration management with:
 - Environment variable support for sensitive data
@@ -361,8 +361,8 @@ class AppConfig:
     mqtt: MqttConfig = field(default_factory=MqttConfig)
 
     # Application metadata
-    script_version: str = 'V26.04.30'
-    last_updated: str = '30 April 2026'
+    script_version: str = 'V26.5.16'
+    last_updated: str = '16 May 2026'
 
     # Paths
     log_file_path: str = '/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/error_log.txt'

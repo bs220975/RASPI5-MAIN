@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Raspberry Pi 4 Home Automation System - Main Application
+Raspberry Pi 5 Home Automation System - Main Application
 
 This is the main entry point for the home automation system featuring:
 - Motion detection with LD2420 radar and GPIO sensors
@@ -41,7 +41,7 @@ from bot_commands import BotCommandHandler
 from firebase_logger import FirebaseLogger
 from mqtt_bridge import MqttBridge
 
-__version__ = '26.04.30'
+__version__ = '26.5.16'
 __author__ = 'Raspberry Pi Home Automation'
 
 logger = logging.getLogger(__name__)
@@ -853,7 +853,7 @@ class RaspberryPiController:
         formatted_time = now.strftime('%A %d/%m/%y %I:%M:%S %p')
 
         msg = (
-            f"Raspberry Pi 4 Home Automation\n"
+            f"Raspberry Pi 5 Home Automation\n"
             f"{'=' * 30}\n"
             f"Version: {self.config.script_version}\n"
             f"Updated: {self.config.last_updated}\n"
@@ -916,7 +916,7 @@ class RaspberryPiController:
 
 def main():
     """Application entry point."""
-    print(f"\nRaspberry Pi 4 Home Automation System v{__version__}")
+    print(f"\nRaspberry Pi 5 Home Automation System v{__version__}")
     print("=" * 50)
 
     controller = RaspberryPiController()

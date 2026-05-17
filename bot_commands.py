@@ -166,7 +166,7 @@ class BotCommandHandler:
     def _cmd_display_commands(self) -> None:
         """Display all available commands with HTML formatting"""
         msg = (
-            "<b>🤖 Raspberry Pi 4 — Bot Commands</b>\n"
+            "<b>🤖 Raspberry Pi 5 — Bot Commands</b>\n"
             "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
             "<b>📹 Video Controls</b>\n"

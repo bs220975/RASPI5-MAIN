@@ -19,7 +19,13 @@
       "Bash(python:*)",
       "Bash(sudo systemctl:*)",
       "WebFetch(domain:api.github.com)",
-      "Bash(source:*)"
+      "Bash(source:*)",
+      "Bash(libcamera-hello *)",
+      "Bash(rpicam-hello --list-cameras)",
+      "Bash(/home/pi5/myenv/bin/python3 *)",
+      "Bash(fuser /dev/video* /dev/media*)",
+      "Bash(ps *)",
+      "Bash(v4l2-ctl *)"
     ]
   }
 }

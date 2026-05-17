@@ -1,5 +1,5 @@
 """
-Raspberry Pi 4 Home Automation System
+Raspberry Pi 5 Home Automation System
 
 A modular home automation system for Raspberry Pi featuring:
 - Motion detection (LD2420 radar, PIR, MMS sensors)
@@ -30,7 +30,7 @@ For configuration, set environment variables or modify config.py:
     INFLUXDB_TOKEN: InfluxDB authentication token
 """
 
-__version__ = '26.01.27'
+__version__ = '26.5.16'
 __author__ = 'Raspberry Pi Home Automation'
 __license__ = 'MIT'
 
