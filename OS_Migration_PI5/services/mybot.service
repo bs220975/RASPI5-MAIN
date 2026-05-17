@@ -17,6 +17,7 @@ Environment="PYTHONUNBUFFERED=1"
 Environment="PATH=/home/pi5/myenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/pi5/.Xauthority"
+Environment="MQTT_HOST=192.168.1.100"
 
 # Logging: Python logging writes to stdout; telepot network timeout noise goes to stderr.
 # Capture structured Python logs to the output file; suppress the raw telepot stderr flood.
