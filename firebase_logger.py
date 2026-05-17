@@ -153,7 +153,7 @@ class FirebaseLogger:
         Called whenever the Pi receives state or availability from the
         ESP32-LP-RLY (192.168.1.89) via MQTT topic
         home/switches/L-Porch-Light/state or .../availability.
-        The app reads this node to show the L-Porch-Light switch status.
+        The app reads lights/lower_porch_light/ to show the switch status.
         """
         data: Dict[str, Any] = {
             'lastSeen':   _ms_now(),
@@ -163,7 +163,7 @@ class FirebaseLogger:
         }
         ok = self._patch('devices/ESP32-LP-RLY', data)
         # Mirror confirmed state so the app switch reflects physical state
-        self._patch('lights/L-Porch-Light', {'confirmed': relay_on, 'lastUpdate': _ms_now()})
+        self._patch('lights/lower_porch_light', {'confirmed': relay_on, 'lastUpdate': _ms_now()})
         return ok
 
     def push_lobby_relay_status(

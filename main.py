@@ -237,9 +237,9 @@ class RaspberryPiController:
                     'lobby', self._on_firebase_porch_light_cmd
                 )
                 self.firebase.start_command_stream(
-                    'L-Porch-Light', self._on_firebase_lp_rly_cmd
+                    'lower_porch_light', self._on_firebase_lp_rly_cmd
                 )
-                logger.info("Firebase light command streams: started (living_room + lobby + L-Porch-Light)")
+                logger.info("Firebase light command streams: started (living_room + lobby + lower_porch_light)")
             else:
                 logger.warning("Firebase connection failed - live status disabled")
 
