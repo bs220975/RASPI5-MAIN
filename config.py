@@ -374,6 +374,9 @@ class AppConfig:
     motion_message_cooldown: int = 120  # seconds between motion notifications
     relay_heartbeat_interval: int = 120  # seconds between ESP01 relay polls
 
+    # Local API server (LAN fallback when Firebase is down)
+    local_api_port: int = 5757
+
     def validate(self) -> bool:
         """Validate all configurations."""
         validators = [

@@ -217,6 +217,17 @@ class FirebaseLogger:
         """
         return self._patch(f'lights/{light_id}', {'confirmed': confirmed})
 
+    def set_light_state(self, light_id: str, state: bool) -> bool:
+        """
+        Write lights/{light_id}/state — keeps the app switch in sync when the
+        relay is toggled by an external source (motion detection, scheduler).
+
+        Without this write, the app's commanded state (state) stays at the last
+        app-set value while confirmed reflects the new physical relay state,
+        causing the app to show a permanent pending spinner on the bulb.
+        """
+        return self._patch(f'lights/{light_id}', {'state': state})
+
     def mark_offline(self) -> bool:
         """Mark Pi as offline in Firebase on clean shutdown."""
         self.stop_command_stream()
@@ -295,6 +306,85 @@ class FirebaseLogger:
         for _thread, stop in self._streams.values():
             stop.set()
         self._streams.clear()
+
+    def get_schedules(self) -> dict:
+        """One-time GET of schedules/ from Firebase. Returns {} on error."""
+        try:
+            resp = requests.get(self._url('schedules'), timeout=self._timeout)
+            if resp.status_code == 200:
+                data = resp.json()
+                return data if isinstance(data, dict) else {}
+        except Exception as e:
+            logger.warning(f'Firebase get_schedules error: {e}')
+        return {}
+
+    def start_schedule_stream(
+        self, callback: Callable[[dict], None]
+    ) -> None:
+        """
+        Start a background SSE listener on schedules/.
+
+        Calls callback(schedules_dict) on startup and whenever any
+        schedule changes.  The dict is keyed by light_id with sub-keys
+        on_time, off_time, enabled.
+        """
+        stream_key = '__schedules__'
+        existing = self._streams.get(stream_key)
+        if existing and existing[0].is_alive():
+            return
+
+        stop = threading.Event()
+
+        def _loop() -> None:
+            url     = self._url('schedules')
+            headers = {'Accept': 'text/event-stream'}
+            schedules: dict = {}
+            while not stop.is_set():
+                try:
+                    with requests.get(
+                        url, headers=headers, stream=True, timeout=(10, None)
+                    ) as resp:
+                        event_type: Optional[str] = None
+                        for line in resp.iter_lines(
+                            chunk_size=1, decode_unicode=True
+                        ):
+                            if stop.is_set():
+                                return
+                            if not line:
+                                event_type = None
+                                continue
+                            if line.startswith('event:'):
+                                event_type = line[6:].strip()
+                            elif line.startswith('data:') and event_type in ('put', 'patch'):
+                                try:
+                                    payload = json.loads(line[5:].strip())
+                                    path = payload.get('path', '/')
+                                    data = payload.get('data')
+                                    if path == '/':
+                                        schedules = data if isinstance(data, dict) else {}
+                                    else:
+                                        light_id = path.lstrip('/')
+                                        if data is None:
+                                            schedules.pop(light_id, None)
+                                        elif isinstance(data, dict):
+                                            schedules[light_id] = data
+                                    callback(schedules.copy())
+                                except Exception:
+                                    pass
+                except Exception as e:
+                    if not stop.is_set():
+                        logger.warning(
+                            f'Firebase schedule stream error: {e}'
+                            ' — reconnecting in 5s'
+                        )
+                        stop.wait(5)
+
+        thread = threading.Thread(
+            target=_loop, name='FirebaseStream-schedules', daemon=True
+        )
+        self._streams[stream_key] = (thread, stop)
+        thread.start()
+        logger.info('Firebase: SSE stream started for schedules/')
 
     # ------------------------------------------------------------------
     # Internal helpers

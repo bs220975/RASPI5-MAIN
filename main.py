@@ -40,6 +40,8 @@ from influxdb_logger import InfluxDBLogger
 from bot_commands import BotCommandHandler
 from firebase_logger import FirebaseLogger
 from mqtt_bridge import MqttBridge
+from light_scheduler import LightScheduler
+from local_api_server import LocalApiServer
 
 __version__ = '26.5.16'
 __author__ = 'Raspberry Pi Home Automation'
@@ -88,6 +90,8 @@ class RaspberryPiController:
         self.bot_handler: Optional[BotCommandHandler] = None
         self.firebase: Optional[FirebaseLogger] = None
         self.mqtt_bridge: Optional[MqttBridge] = None
+        self.scheduler: Optional[LightScheduler] = None
+        self.local_api: Optional[LocalApiServer] = None
 
         # Motion detection state
         self._last_motion_time: float = 0
@@ -119,6 +123,10 @@ class RaspberryPiController:
         self._lp_rly_light_on: bool = False
         self._last_lp_rly_cmd: Optional[bool] = None
         self._lp_rly_cmd_timer: Optional[threading.Timer] = None
+
+        # MQTT availability flags — used by _get_local_device_states()
+        self._porch_reachable: bool = False
+        self._lp_rly_reachable: bool = False
 
         # Setup logging
         self._setup_logging()
@@ -260,6 +268,32 @@ class RaspberryPiController:
                 logger.info("MQTT bridge: started")
             else:
                 logger.warning("MQTT bridge: start failed - HTTP fallback active")
+
+            # Initialize local API server (LAN fallback when Firebase is down)
+            logger.info("Initializing local API server...")
+            self.local_api = LocalApiServer(
+                port=self.config.local_api_port,
+                on_light_cmd=self._on_local_api_cmd,
+                get_device_states=self._get_local_device_states,
+            )
+            self.local_api.start()
+            logger.info(f"Local API server: port {self.config.local_api_port}")
+
+            # Initialize light scheduler (Firebase-backed cron timers)
+            logger.info("Initializing light scheduler...")
+            self.scheduler = LightScheduler(
+                send_lobby=lambda s: self.mqtt_bridge and self.mqtt_bridge.send_lobby_relay(s),
+                send_porch=lambda s: self.mqtt_bridge and self.mqtt_bridge.send_porch_relay(s),
+                send_lp_rly=lambda s: self.mqtt_bridge and self.mqtt_bridge.send_lp_rly_relay(s),
+            )
+            self.scheduler.start()
+            if self.firebase:
+                initial = self.firebase.get_schedules()
+                if initial:
+                    self.scheduler.apply_schedules(initial)
+                    logger.info(f"Loaded {len(initial)} schedule(s) from Firebase")
+                self.firebase.start_schedule_stream(self.scheduler.apply_schedules)
+            logger.info("Light scheduler: OK")
 
             # Start bot message loop
             self.telegram.start_message_loop(self.bot_handler.handle_message)
@@ -487,8 +521,6 @@ class RaspberryPiController:
 
             if state != self._last_relay_state:
                 self._last_relay_state = state
-                if self.telegram:
-                    self.telegram.send_text(msg)
         except Exception as e:
             logger.error(f"Relay heartbeat error: {e}")
 
@@ -572,12 +604,17 @@ class RaspberryPiController:
         except (ValueError, AttributeError):
             relay_on = payload.upper() == 'ON'
 
+        # Set dedup flag before Firebase write so the SSE command stream skips
+        # re-execution when it sees the updated state value.
+        self._last_living_room_cmd = relay_on
+
         def _update() -> None:
             if self.firebase:
                 self.firebase.push_lobby_relay_status(
                     reachable=True, relay_on=relay_on
                 )
                 self.firebase.set_light_confirmed('living_room', relay_on)
+                self.firebase.set_light_state('living_room', relay_on)
         threading.Thread(target=_update, daemon=True).start()
 
     def _on_porch_mqtt_state(self, payload: str) -> None:
@@ -589,7 +626,10 @@ class RaspberryPiController:
         """
         relay_on = payload.upper() == 'ON'
         self._porch_light_on = relay_on
+        self._porch_reachable = True
         logger.info(f'Porch relay state via MQTT: {"ON" if relay_on else "OFF"}')
+
+        self._last_porch_cmd = relay_on
 
         def _update() -> None:
             if self.firebase:
@@ -597,6 +637,7 @@ class RaspberryPiController:
                     reachable=True, relay_on=relay_on
                 )
                 self.firebase.set_light_confirmed('lobby', relay_on)
+                self.firebase.set_light_state('lobby', relay_on)
         threading.Thread(target=_update, daemon=True).start()
 
     def _on_porch_availability_changed(self, available: bool) -> None:
@@ -612,6 +653,7 @@ class RaspberryPiController:
           - "online"  → reachable=True, relay_on=last known state → green dot
           - "offline" → reachable=False, relay_on=False → red dot immediately
         """
+        self._porch_reachable = available
         logger.info(f'Porch relay availability: {"online" if available else "offline"}')
 
         def _update() -> None:
@@ -704,11 +746,15 @@ class RaspberryPiController:
         """
         relay_on = payload.upper() == 'ON'
         self._lp_rly_light_on = relay_on
+        self._lp_rly_reachable = True
         logger.info(f'LP-RLY state via MQTT: {"ON" if relay_on else "OFF"}')
+
+        self._last_lp_rly_cmd = relay_on
 
         def _update() -> None:
             if self.firebase:
                 self.firebase.push_lp_rly_status(reachable=True, relay_on=relay_on)
+                self.firebase.set_light_state('lower_porch_light', relay_on)
         threading.Thread(target=_update, daemon=True).start()
 
     def _on_lp_rly_availability_changed(self, available: bool) -> None:
@@ -718,6 +764,7 @@ class RaspberryPiController:
         Immediately marks the Firebase device node reachable/unreachable
         so the app switch shows the correct dot colour without waiting.
         """
+        self._lp_rly_reachable = available
         logger.info(f'LP-RLY availability: {"online" if available else "offline"}')
 
         def _update() -> None:
@@ -851,9 +898,10 @@ class RaspberryPiController:
             self._motion_stable_start = current_time
             return
 
-        # Wait for 2 seconds of stable motion
+        # Wait for 2 seconds of stable motion, then log once per motion event
         if current_time - self._motion_stable_start >= 2:
             self.influx.log_motion_state(motion_detected)
+            self._motion_stable_start = float('inf')  # prevent re-firing until motion resets
 
     def _on_recording_complete(self, result: RecordingResult) -> None:
         """Callback when video recording completes."""
@@ -899,6 +947,59 @@ class RaspberryPiController:
         if self.firebase:
             self._push_firebase_status()
 
+    def _on_local_api_cmd(self, light_id: str, state: bool) -> None:
+        """
+        Route a command from the local LAN API to the correct execute method.
+
+        Bypasses the Firebase debounce timer — the execute methods themselves
+        deduplicate consecutive identical commands via _last_*_cmd guards.
+        """
+        logger.info(f'Local API: {light_id} → {"ON" if state else "OFF"}')
+        if light_id == 'living_room':
+            self._execute_light_cmd(state)
+        elif light_id == 'lobby':
+            self._execute_porch_cmd(state)
+        elif light_id == 'lower_porch_light':
+            self._execute_lp_rly_cmd(state)
+        else:
+            logger.warning(f'Local API: unknown light_id "{light_id}"')
+
+    def _get_local_device_states(self) -> dict:
+        """
+        Return current device states for GET /devices.
+
+        Uses the same field names as Firebase /devices/ so the Flutter app can
+        parse both sources with identical code.  lastSeen is always 'now' since
+        the Pi is live when this is called.
+        """
+        import time as _time
+        now_ms = int(_time.time() * 1000)
+
+        lr_state = self._last_relay_state
+        lr_reachable = isinstance(lr_state, str)  # 'ON' / 'OFF' → online; sentinel/None → offline
+
+        return {
+            'RASPI-5': {
+                'reachable': True,
+                'lastSeen': now_ms,
+            },
+            'ESP01-LL-RLY': {
+                'reachable': lr_reachable,
+                'relay': lr_state == 'ON',
+                'lastSeen': now_ms,
+            },
+            'esp01_relay': {
+                'reachable': self._porch_reachable,
+                'relay': self._porch_light_on,
+                'lastSeen': now_ms,
+            },
+            'ESP32-LP-RLY': {
+                'reachable': self._lp_rly_reachable,
+                'relay': self._lp_rly_light_on,
+                'lastSeen': now_ms,
+            },
+        }
+
     def _signal_handler(self, signum: int, frame) -> None:
         """Handle shutdown signals."""
         logger.info(f"Received signal {signum}, initiating shutdown...")
@@ -926,6 +1027,14 @@ class RaspberryPiController:
 
         if self._lp_rly_cmd_timer is not None:
             self._lp_rly_cmd_timer.cancel()
+
+        if self.scheduler:
+            logger.info("Stopping light scheduler...")
+            self.scheduler.stop()
+
+        if self.local_api:
+            logger.info("Stopping local API server...")
+            self.local_api.stop()
 
         if self.mqtt_bridge:
             logger.info("Stopping MQTT bridge...")
