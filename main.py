@@ -112,12 +112,16 @@ class RaspberryPiController:
         self._last_living_room_cmd: Optional[bool] = None
         # Debounce timer — cancelled/reset on each rapid incoming command
         self._light_cmd_timer: Optional[threading.Timer] = None
+        # Timestamp of last manual turn-off; blocks motion auto-ON for 2 minutes
+        self._living_room_manual_off_time: float = 0
 
         # Porch relay state (managed by MQTT radar motion + Firebase lobby2 stream)
         self._porch_light_on: bool = False
         self._porch_light_off_timer: Optional[threading.Timer] = None
         self._last_porch_cmd: Optional[bool] = None
         self._porch_cmd_timer: Optional[threading.Timer] = None
+        # Timestamp of last manual turn-off; blocks radar auto-ON for 2 minutes
+        self._porch_manual_off_time: float = 0
 
         # LP porch relay state (ESP32-LP-RLY / L-Porch-Light app switch)
         self._lp_rly_light_on: bool = False
@@ -487,6 +491,11 @@ class RaspberryPiController:
         if current_time - self._last_light_activation < self.config.light_cooldown:
             return
 
+        # Respect manual override: if user turned it off within 2 minutes, skip
+        if current_time - self._living_room_manual_off_time < 120:
+            logger.debug('Motion trigger: living room manual override active — skipping auto-ON')
+            return
+
         self._last_light_activation = current_time
 
         def activate():
@@ -550,6 +559,10 @@ class RaspberryPiController:
         if cmd == self._last_living_room_cmd:
             logger.debug(f'Light cmd {"ON" if cmd else "OFF"} skipped — same as last executed')
             return
+        if not cmd and self._last_living_room_cmd:
+            # User explicitly turned it off while ON — block motion re-activation
+            self._living_room_manual_off_time = time.time()
+            logger.debug('Living room manual OFF recorded — motion auto-ON suppressed for 2 min')
         self._last_living_room_cmd = cmd
         logger.info(f'Executing light command: {"ON" if cmd else "OFF"}')
 
@@ -683,6 +696,10 @@ class RaspberryPiController:
                 self._porch_light_off_timer = None
 
             if is_night and self.mqtt_bridge:
+                # Respect manual override: if user turned porch OFF within 2 min, skip
+                if time.time() - self._porch_manual_off_time < 120:
+                    logger.debug('Radar motion: porch manual override active — skipping auto-ON')
+                    return
                 logger.info('Radar motion ON (night) → porch relay ON')
                 self.mqtt_bridge.send_porch_relay(True)
         else:
@@ -722,6 +739,10 @@ class RaspberryPiController:
         if cmd == self._last_porch_cmd:
             logger.debug(f'Porch cmd {"ON" if cmd else "OFF"} skipped — same as last')
             return
+        if not cmd and self._porch_light_on:
+            # User explicitly turned it off while ON — block radar re-activation
+            self._porch_manual_off_time = time.time()
+            logger.debug('Porch manual OFF recorded — radar auto-ON suppressed for 2 min')
         self._last_porch_cmd = cmd
         logger.info(f'Executing porch command: {"ON" if cmd else "OFF"}')
 
