@@ -579,7 +579,9 @@ class RaspberryPiController:
             else:
                 success, _ = self.esp.lobby_light_off()
             if self.firebase:
-                self.firebase.set_light_confirmed('living_room', success and cmd)
+                confirmed = success and cmd
+                self.firebase.set_light_confirmed('living_room', confirmed)
+                self.firebase.set_light_state('living_room', confirmed)
             logger.info(
                 f'Living room confirmed (HTTP): {"ON" if (success and cmd) else "OFF"}'
             )
@@ -775,6 +777,7 @@ class RaspberryPiController:
         def _update() -> None:
             if self.firebase:
                 self.firebase.push_lp_rly_status(reachable=True, relay_on=relay_on)
+                self.firebase.set_light_confirmed('lower_porch_light', relay_on)
                 self.firebase.set_light_state('lower_porch_light', relay_on)
         threading.Thread(target=_update, daemon=True).start()
 

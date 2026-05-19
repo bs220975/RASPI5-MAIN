@@ -41,9 +41,9 @@ MQTT connections at a time.
 
 | Path | Purpose |
 |---|---|
-| `/home/pi/myenv/` | Python virtual environment |
-| `/home/pi/pi5_drive/Git_projects/RASPI5-MAIN/` | Main project (GitHub) |
-| `/home/pi/pi5_drive/Git_projects/RASPI5-MAIN/logs/` | Service logs |
+| `/home/pi5/myenv/` | Python virtual environment |
+| `/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/` | Main project (GitHub) |
+| `/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/` | Service logs |
 
 ---
 
@@ -57,8 +57,8 @@ sudo systemctl restart mybot.service
 journalctl -u mybot.service -f
 
 # Run manually (debug)
-cd /home/pi/pi5_drive/Git_projects/RASPI5-MAIN
-source /home/pi/myenv/bin/activate
+cd /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN
+source /home/pi5/myenv/bin/activate
 python3 main.py
 ```
 
