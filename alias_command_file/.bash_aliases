@@ -84,7 +84,7 @@ _pi_status() {
     _PI5_VIP=$pi5_vip; _PI4_VIP=$pi4_vip
 }
 
-pi4master() {
+makepi4master() {
     _pi_status
     if [ "$_PI4_VIP" -gt 0 ]; then
         echo "  [INFO] Pi4 is already MASTER — nothing to do."
@@ -100,7 +100,7 @@ pi4master() {
     sshpass -p 22 ssh -o StrictHostKeyChecking=no pi@192.168.1.122 "source ~/.bash_aliases && startall --force"
 }
 
-pi5master() {
+makepi5master() {
     _pi_status
     if [ "$_PI5_VIP" -gt 0 ]; then
         echo "  [INFO] Pi5 is already MASTER — nothing to do."

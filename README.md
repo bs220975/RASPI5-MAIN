@@ -81,6 +81,25 @@ Pi5 (192.168.1.108)  ─┘                         │
 - VIP migrates to the standby Pi within ~3 s if the MASTER's Keepalived stops.
 - `nopreempt` — recovered Pi rejoins as BACKUP; does not reclaim VIP automatically.
 
+### VIP Handoff Commands (from `.bash_aliases`)
+
+Run these from **Pi5** to transfer the active MASTER role between Pis. Both commands first print current status and ask for confirmation before acting.
+
+| Command | Action |
+|---|---|
+| `makepi5master` | Stop Pi4 services → start Pi5 services → Pi5 claims the VIP |
+| `makepi4master` | Stop Pi5 services → start Pi4 services → Pi4 claims the VIP |
+
+```bash
+# Transfer VIP to Pi5 (run from Pi5)
+makepi5master
+
+# Transfer VIP to Pi4 (run from Pi5)
+makepi4master
+```
+
+Both commands call `_pi_status` first, show which Pi currently holds the VIP, and abort if the target is already MASTER.
+
 ---
 
 ## Troubleshooting
