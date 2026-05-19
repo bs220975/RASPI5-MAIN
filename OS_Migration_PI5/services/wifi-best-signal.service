@@ -1,0 +1,12 @@
+[Unit]
+Description=Connect to strongest available saved WiFi on boot
+After=NetworkManager.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wifi-best-signal.sh
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

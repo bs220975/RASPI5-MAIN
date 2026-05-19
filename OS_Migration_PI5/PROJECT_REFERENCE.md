@@ -9,6 +9,7 @@
 
 | Date | Changes |
 |---|---|
+| 2026-05-19 | Added `wifi-best-signal` service — connects to strongest saved WiFi on boot (multi-floor roaming). Script in `shell_scripts/`, service in `OS_Migration_PI5/services/`. Add to Manual Steps after OS reimage. |
 | 2026-05-17 | Added Keepalived VRRP for dual-Pi hub IP failover. `keepalived` service added to Services table. `mybot.service` updated with `MQTT_HOST=192.168.1.100`. Added ESP32-LP-RLY to credentials table. |
 | 2026-05-15 | OS_Migration_PI5 created from Pi4 migration infrastructure. All paths, user, hostname updated for Pi5 (pi5 / pi5 / 192.168.1.108). |
 
@@ -107,6 +108,7 @@ RASPI5-MAIN/
 | `mybot.service` | `RASPI5-MAIN/main.py` | YES | `always` — 5 crashes in 5 min → Pi reboots |
 | `mqttdatainflux.service` | `RASPI5-MAIN/influx_aws_publish/influxdb2_aws_publish.py` | YES | `on-failure` — max 1 restart per 5 min |
 | `keepalived` | VRRP hub IP failover — holds/releases `192.168.1.100` | YES | system default |
+| `wifi-best-signal` | On boot, scans all saved WiFi and connects to strongest signal | YES | oneshot |
 | `mybot2.service` | (secondary service) | NO | manual enable only if needed |
 | `mosquitto` | MQTT broker port 1883 | YES | system default |
 | `influxdb` | InfluxDB 2.x port 8086 | YES | system default |
@@ -327,7 +329,17 @@ sync
 
 ### Manual Steps After Setup
 
-1. **AWS Certs** — if not auto-restored:
+1. **WiFi best-signal service** — connect to strongest saved WiFi on boot (needed for multi-floor roaming):
+   ```bash
+   sudo cp /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/shell_scripts/wifi-best-signal.sh /usr/local/bin/
+   sudo chmod +x /usr/local/bin/wifi-best-signal.sh
+   sudo cp /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/OS_Migration_PI5/services/wifi-best-signal.service /etc/systemd/system/
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now wifi-best-signal.service
+   ```
+   Verify: `sudo journalctl -t wifi-best-signal -n 20`
+
+2. **AWS Certs** — if not auto-restored:
    ```bash
    cp -r /media/pi5/USB/pre_reimage_*/aws_certs/ \
      /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/aws_certs/
