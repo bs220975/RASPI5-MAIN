@@ -563,6 +563,10 @@ class RaspberryPiController:
             # User explicitly turned it off while ON — block motion re-activation
             self._living_room_manual_off_time = time.time()
             logger.debug('Living room manual OFF recorded — motion auto-ON suppressed for 2 min')
+        elif cmd:
+            # User explicitly turned it ON — clear the manual override immediately
+            self._living_room_manual_off_time = 0
+            logger.debug('Living room manual ON — motion auto-ON override cleared')
         self._last_living_room_cmd = cmd
         logger.info(f'Executing light command: {"ON" if cmd else "OFF"}')
 
@@ -745,6 +749,10 @@ class RaspberryPiController:
             # User explicitly turned it off while ON — block radar re-activation
             self._porch_manual_off_time = time.time()
             logger.debug('Porch manual OFF recorded — radar auto-ON suppressed for 2 min')
+        elif cmd:
+            # User explicitly turned it ON — clear the manual override immediately
+            self._porch_manual_off_time = 0
+            logger.debug('Porch manual ON — radar auto-ON override cleared')
         self._last_porch_cmd = cmd
         logger.info(f'Executing porch command: {"ON" if cmd else "OFF"}')
 

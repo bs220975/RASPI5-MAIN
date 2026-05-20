@@ -107,6 +107,7 @@ Both commands call `_pi_status` first, show which Pi currently holds the VIP, an
 | Symptom | Cause / Fix |
 |---|---|
 | Porch/living-room light keeps toggling on by itself after user turns it off | Radar or LD2420 motion is still active while user manually turns light OFF — motion was firing auto-ON again; fixed in 2026-05-18: `_porch_manual_off_time` / `_living_room_manual_off_time` timestamps block auto-ON for 2 minutes after a manual OFF via app |
+| Motion auto-ON takes 2–4 minutes to re-enable after manually toggling a light | Manual OFF sets the 2-min block timer but turning ON never cleared it; each OFF→ON→OFF cycle was resetting the timer to a fresh 2 minutes; fixed in 2026-05-20: `_execute_light_cmd` / `_execute_porch_cmd` now reset `_*_manual_off_time = 0` on explicit ON |
 | Light switch in app does nothing | Check Firebase SSE streams started in log; check MQTT bridge connected to `192.168.1.100:1883` |
 | Porch light not turning on at night | Check radar MQTT arriving (`home/esp32/radar2/motion`); check night hours 18–06; check `_porch_light_on` state |
 | App bulb shows permanent pending spinner when light triggered by motion or timer | `state` and `confirmed` out of sync — `_on_lobby_mqtt_state` / `_on_porch_mqtt_state` / `_on_lp_rly_mqtt_state` write both `confirmed` and `state` to Firebase; check that MQTT state callbacks are firing in the log |
@@ -120,6 +121,7 @@ Both commands call `_pi_status` first, show which Pi currently holds the VIP, an
 
 | Date | Change |
 |---|---|
+| 2026-05-20 | Fix motion auto-ON re-enable delay (2–4 min) after manually toggling a light from the app — `_living_room_manual_off_time` and `_porch_manual_off_time` were set on every manual OFF but never cleared when the user turned the light back ON; each OFF→ON→OFF cycle reset the timer to a fresh 2 minutes; fixed in `_execute_light_cmd` and `_execute_porch_cmd` by adding `elif cmd: _*_manual_off_time = 0` so an explicit ON immediately clears the override |
 | 2026-05-18 | Fix light auto-toggle loop — when user manually turns OFF a porch or living-room light while motion is still active, the radar (`_on_radar_motion`) and LD2420 loop (`_trigger_light_control`) were immediately overriding the user's intent and turning it back ON; added `_porch_manual_off_time` and `_living_room_manual_off_time` timestamps recorded in `_execute_porch_cmd` / `_execute_light_cmd` on every manual OFF; both auto-ON paths check these timestamps and skip re-activation for 120 seconds after a manual OFF; normal automatic behaviour resumes after 2 minutes |
 | 2026-05-18 | Add local HTTP API server (`local_api_server.py`, port 5757) — LAN fallback for light control when Firebase/internet is down; `PUT /lights/{id}` routes directly to relay execute methods; Pi deduplicates if both paths deliver |
 | 2026-05-18 | Fix pending spinner on app bulb when light triggered by motion or scheduler — MQTT state callbacks now write both `lights/{id}/state` and `confirmed` to Firebase; `_last_*_cmd` dedup flag set before Firebase write to prevent SSE feedback loop |
