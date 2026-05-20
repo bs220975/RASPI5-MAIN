@@ -4,6 +4,7 @@ Local HTTP API server — light-control fallback when Firebase/internet is down.
 Listens on 0.0.0.0:{port} and accepts:
     PUT /lights/{id}   body: {"state": true|false}  → toggle a named light
     GET /ping          → {"ok": true}  (reachability probe)
+    GET /identity      → {"hostname": "<this Pi's hostname>"}  (VIP-holder identification)
 
 Commands are forwarded via the on_light_cmd callback, which the main
 controller wires to _execute_light_cmd / _execute_porch_cmd / etc.
@@ -11,6 +12,7 @@ The server runs in a daemon thread so it stops automatically with the process.
 """
 import json
 import logging
+import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Callable, Optional
@@ -55,6 +57,8 @@ class LocalApiServer:
                 path = self.path.rstrip('/')
                 if path == '/ping':
                     self._reply(200, {'ok': True})
+                elif path == '/identity':
+                    self._reply(200, {'hostname': socket.gethostname()})
                 elif path == '/devices':
                     if get_device_states is None:
                         self._reply(503, {'error': 'not available'})
