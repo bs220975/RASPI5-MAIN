@@ -15,9 +15,19 @@ import logging
 import socket
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from socketserver import ThreadingMixIn
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
+
+
+class _ThreadingHTTPServer(ThreadingMixIn, HTTPServer):
+    """HTTPServer that handles each connection in its own thread.
+
+    Prevents a stalled or slow client (e.g. Flutter app timing out mid-request)
+    from blocking the accept loop and making /ping appear unreachable.
+    """
+    daemon_threads = True
 
 
 class LocalApiServer:
@@ -30,11 +40,11 @@ class LocalApiServer:
         self._port = port
         self._on_light_cmd = on_light_cmd
         self._get_device_states = get_device_states
-        self._server: Optional[HTTPServer] = None
+        self._server: Optional[_ThreadingHTTPServer] = None
 
     def start(self) -> None:
         handler = self._make_handler(self._on_light_cmd, self._get_device_states)
-        self._server = HTTPServer(('0.0.0.0', self._port), handler)
+        self._server = _ThreadingHTTPServer(('0.0.0.0', self._port), handler)
         threading.Thread(
             target=self._server.serve_forever,
             name='LocalApiServer',
