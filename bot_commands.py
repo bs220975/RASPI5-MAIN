@@ -566,7 +566,7 @@ class BotCommandHandler:
         if not self.sensors:
             self.telegram.send_text("Sensor manager not available")
             return
-        state = self.sensors.gpio.read_reed_switch()
+        state = self.sensors.gpio.read_reed()
         door_status = "CLOSED" if state else "OPEN"
         self.telegram.send_text(f"Reed switch (GPIO 26): {door_status}")
 
@@ -575,7 +575,7 @@ class BotCommandHandler:
         if not self.sensors:
             self.telegram.send_text("Sensor manager not available")
             return
-        state = self.sensors.gpio.read_reed_switch()
+        state = self.sensors.gpio.read_reed()
         door_status = "CLOSED" if state else "OPEN"
         self.telegram.send_text(f"Reed switch (GPIO 26): {door_status}")
 

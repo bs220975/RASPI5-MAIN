@@ -42,6 +42,7 @@ from firebase_logger import FirebaseLogger
 from mqtt_bridge import MqttBridge
 from light_scheduler import LightScheduler
 from local_api_server import LocalApiServer
+from aws_iot_publisher import AwsIoTPublisher
 
 __version__ = '26.5.16'
 __author__ = 'Raspberry Pi Home Automation'
@@ -92,6 +93,7 @@ class RaspberryPiController:
         self.mqtt_bridge: Optional[MqttBridge] = None
         self.scheduler: Optional[LightScheduler] = None
         self.local_api: Optional[LocalApiServer] = None
+        self.aws_door: Optional[AwsIoTPublisher] = None
 
         # Motion detection state
         self._last_motion_time: float = 0
@@ -213,6 +215,13 @@ class RaspberryPiController:
                 on_close=self._on_door_close,
             )
             logger.info("Reed switch door callbacks: registered")
+
+            # Connect AWS IoT publisher for door notifications
+            self.aws_door = AwsIoTPublisher()
+            if self.aws_door.connect():
+                logger.info("AWS IoT door publisher: connected")
+            else:
+                logger.warning("AWS IoT door publisher: connect failed — will retry on first event")
 
             # Initialize video recorder
             logger.info("Initializing video recorder...")
@@ -599,6 +608,8 @@ class RaspberryPiController:
         logger.info(msg)
         if self.telegram:
             self.telegram.send_text(f"🚪 {msg}")
+        if self.aws_door:
+            self.aws_door.publish_door_event("open")
 
     def _on_door_close(self) -> None:
         """Called by reed switch edge interrupt when door closes."""
@@ -607,6 +618,8 @@ class RaspberryPiController:
         logger.info(msg)
         if self.telegram:
             self.telegram.send_text(f"🔒 {msg}")
+        if self.aws_door:
+            self.aws_door.publish_door_event("closed")
 
     def _on_lobby_mqtt_state(self, payload: str) -> None:
         """
@@ -1067,6 +1080,10 @@ class RaspberryPiController:
         if self.local_api:
             logger.info("Stopping local API server...")
             self.local_api.stop()
+
+        if self.aws_door:
+            logger.info("Disconnecting AWS IoT door publisher...")
+            self.aws_door.disconnect()
 
         if self.mqtt_bridge:
             logger.info("Stopping MQTT bridge...")

@@ -121,10 +121,10 @@ class InfluxDBConfig:
         default_factory=lambda: _get_env('INFLUXDB_TOKEN', 'mytoken')
     )
     org: str = field(
-        default_factory=lambda: _get_env('INFLUXDB_ORG', 'pi4org')
+        default_factory=lambda: _get_env('INFLUXDB_ORG', 'pi5org')
     )
     bucket: str = field(
-        default_factory=lambda: _get_env('INFLUXDB_BUCKET', 'pi4data')
+        default_factory=lambda: _get_env('INFLUXDB_BUCKET', 'pi5data')
     )
     timeout: int = 10000
 
@@ -133,7 +133,7 @@ class InfluxDBConfig:
     legacy_port: int = 8086
     legacy_user: str = 'admin'
     legacy_password: str = 'admin'
-    legacy_database: str = 'pi4data'
+    legacy_database: str = 'pi5data'
 
     def validate(self) -> bool:
         """Validate configuration values."""
