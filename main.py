@@ -209,19 +209,13 @@ class RaspberryPiController:
             else:
                 logger.warning("Sensor initialization partial - some sensors unavailable")
 
-            # Register reed switch door callbacks
-            self.sensors.gpio.set_reed_callbacks(
-                on_open=self._on_door_open,
-                on_close=self._on_door_close,
-            )
-            logger.info("Reed switch door callbacks: registered")
+            # Pi5 has no physical reed switch — callbacks intentionally disabled
+            # to prevent EMI from the 24 GHz radar triggering phantom door events.
+            logger.info("Reed switch door callbacks: disabled (no hardware on Pi5)")
 
-            # Connect AWS IoT publisher for door notifications
-            self.aws_door = AwsIoTPublisher()
-            if self.aws_door.connect():
-                logger.info("AWS IoT door publisher: connected")
-            else:
-                logger.warning("AWS IoT door publisher: connect failed — will retry on first event")
+            # aws_door not needed — Pi5 has no door sensor
+            self.aws_door = None
+            logger.info("AWS IoT door publisher: skipped (no reed switch on Pi5)")
 
             # Initialize video recorder
             logger.info("Initializing video recorder...")
