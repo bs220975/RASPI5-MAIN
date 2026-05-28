@@ -14,13 +14,17 @@ EXCLUDES=(
     --filter "- .firebase/"
     --filter "- .vscode/"
     --exclude "*.pyc"
-    # Parallel transfers + Drive-optimised listing
-    --transfers 8
-    --checkers 16
+    # Low concurrency prevents Google Drive 429 rate-limit back-offs.
+    # 8+ transfers fires too many simultaneous API calls → 30-40s stalls.
+    --transfers 2
+    --checkers 4
     --fast-list
-    # Limit Drive API rate to avoid throttling (requests/sec + burst allowance)
-    --tpslimit 10
-    --tpslimit-burst 50
+    # 4 TPS with a small burst stays under Drive's per-user quota ceiling
+    --tpslimit 4
+    --tpslimit-burst 10
+    # Minimum sleep between Drive requests prevents burst-triggered back-off
+    --drive-pacer-min-sleep 100ms
+    --drive-pacer-burst 10
 )
 
 # Colors
