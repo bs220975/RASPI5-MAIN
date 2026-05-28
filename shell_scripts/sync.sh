@@ -290,19 +290,22 @@ function upload_specific() {
 
     browse_select || { echo -e "${YELLOW}Cancelled.${NC}"; return 0; }
     local local_path="$SELECTED_PATH"
+    local name
+    name=$(basename "$local_path")
 
-    # Compute matching remote path
-    local rel_path="${local_path#${DEST_LOCAL}/}"
+    # Remote destination: selected item placed directly under SRC_REMOTE root.
+    # e.g. selecting Git_projects/RASPI5-MAIN → gdrive:/pi5_drive/RASPI5-MAIN
+    # No intermediate parent folders are created on Drive.
+    local remote_dest="${SRC_REMOTE}/${name}"
 
     echo ""
     if [ -f "$local_path" ]; then
         # ── Single file ──────────────────────────────────────────────
-        local remote_dir="${SRC_REMOTE}/$(dirname "$rel_path")"
         local fsize
         fsize=$(du -sh "$local_path" | cut -f1)
         echo -e "  Type   : ${YELLOW}file${NC}"
         echo -e "  Local  : ${YELLOW}${local_path}${NC}"
-        echo -e "  Remote : ${YELLOW}${remote_dir}/$(basename "$local_path")${NC}"
+        echo -e "  Remote : ${YELLOW}${remote_dest}${NC}"
         echo -e "  Size   : ${YELLOW}${fsize}${NC}"
         echo ""
         echo -ne "Proceed? (y/n): "
@@ -311,12 +314,11 @@ function upload_specific() {
         echo ""
         echo -e "${CYAN}${BOLD}Uploading...${NC}"
         echo "---------------------------------------"
-        rclone copy "$local_path" "$remote_dir" --progress 2>&1
+        rclone copy "$local_path" "$SRC_REMOTE" --progress 2>&1
         echo "---------------------------------------"
         echo -e "${GREEN}${BOLD}Upload complete.${NC}"
     else
         # ── Directory ────────────────────────────────────────────────
-        local remote_path="${SRC_REMOTE}/${rel_path}"
         local dir_size file_count
         dir_size=$(du -sh "$local_path" 2>/dev/null | cut -f1)
         file_count=$(find "$local_path" -type f \
@@ -325,7 +327,7 @@ function upload_specific() {
             | wc -l)
         echo -e "  Type       : ${YELLOW}directory${NC}"
         echo -e "  Local      : ${YELLOW}${local_path}${NC}"
-        echo -e "  Remote     : ${YELLOW}${remote_path}${NC}"
+        echo -e "  Remote     : ${YELLOW}${remote_dest}/${NC}"
         echo -e "  Size       : ${YELLOW}${dir_size}${NC}"
         echo -e "  File count : ${YELLOW}${file_count}${NC} (excluding build artefacts)"
         echo ""
@@ -340,7 +342,7 @@ function upload_specific() {
         echo ""
         echo -e "${CYAN}${BOLD}Uploading...${NC}"
         echo "---------------------------------------"
-        rclone copy "$local_path" "$remote_path" "${EXCLUDES[@]}" \
+        rclone copy "$local_path" "$remote_dest" "${EXCLUDES[@]}" \
             -v --stats 3s --stats-one-line 2>&1
         echo "---------------------------------------"
         echo -e "${GREEN}${BOLD}Upload complete.${NC}"
