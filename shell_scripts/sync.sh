@@ -2,6 +2,9 @@
 
 SRC_REMOTE="gdrive:/pi5_drive"
 DEST_LOCAL="/home/pi5/pi5_drive"
+GIT_PROJECTS="/home/pi5/pi5_drive/Git_projects"
+BACKUP_REMOTE="gdrive:/pi5_drive/Git_projects_backups"
+KEEP_BACKUPS=5   # number of dated zips to keep on Drive
 
 # Exclude git internals, build artifacts, caches at any directory depth.
 # Use --filter "- dir/" so rclone skips the directory entirely (faster than --exclude).
@@ -14,17 +17,16 @@ EXCLUDES=(
     --filter "- .firebase/"
     --filter "- .vscode/"
     --exclude "*.pyc"
-    # Low concurrency prevents Google Drive 429 rate-limit back-offs.
-    # 8+ transfers fires too many simultaneous API calls → 30-40s stalls.
-    --transfers 2
+    # Single transfer + slow pacer avoids Google Drive 429 back-off explosions.
+    # With 1000+ small files each needing ~3 API calls, bursting always triggers
+    # rate limits; a 500ms floor keeps us under the per-user quota ceiling.
+    --transfers 1
     --checkers 4
     --fast-list
-    # 4 TPS with a small burst stays under Drive's per-user quota ceiling
-    --tpslimit 4
-    --tpslimit-burst 10
-    # Minimum sleep between Drive requests prevents burst-triggered back-off
-    --drive-pacer-min-sleep 100ms
-    --drive-pacer-burst 10
+    --tpslimit 2
+    --tpslimit-burst 2
+    --drive-pacer-min-sleep 500ms
+    --drive-pacer-burst 2
 )
 
 # Colors
@@ -86,18 +88,88 @@ function dry_run_summary() {
     echo ""
 }
 
+function zip_and_upload() {
+    local timestamp
+    timestamp=$(date +%Y%m%d_%H%M%S)
+    local zip_name="Git_projects_${timestamp}.zip"
+    local zip_path="/tmp/${zip_name}"
+
+    echo ""
+    echo -e "${CYAN}${BOLD}==== Zip & Upload: Git_projects → Drive ====${NC}"
+    echo -e "  Source  : ${YELLOW}${GIT_PROJECTS}${NC}"
+    echo -e "  Archive : ${YELLOW}${zip_path}${NC}"
+    echo -e "  Remote  : ${YELLOW}${BACKUP_REMOTE}/${zip_name}${NC}"
+    echo ""
+
+    # Show what will be zipped (uncompressed size, excluding junk dirs)
+    raw_size=$(du -sh --exclude=".git" --exclude=".pio" --exclude="node_modules" \
+        --exclude="__pycache__" --exclude="build" "$GIT_PROJECTS" 2>/dev/null | cut -f1)
+    echo -e "  Uncompressed : ${YELLOW}${raw_size}${NC} (source code compresses ~75%)"
+    echo ""
+    echo -ne "Proceed? (y/n): "
+    read choice
+    [[ "$choice" != "y" && "$choice" != "Y" ]] && { echo -e "${YELLOW}Skipped.${NC}"; return 0; }
+
+    # Create zip — exclude build artefacts
+    echo ""
+    echo -e "${CYAN}${BOLD}Compressing...${NC}"
+    zip -r "$zip_path" "$GIT_PROJECTS" \
+        -x "*/.git/*" \
+        -x "*/.pio/*" \
+        -x "*/node_modules/*" \
+        -x "*/__pycache__/*" \
+        -x "*/build/*" \
+        -x "*/.firebase/*" \
+        -x "*/.vscode/*" \
+        -x "*.pyc" \
+        -q
+    zip_size=$(du -sh "$zip_path" | cut -f1)
+    echo -e "  Compressed size: ${GREEN}${zip_size}${NC}"
+
+    # Upload — single file → no per-file API overhead, no rate limiting
+    echo ""
+    echo -e "${CYAN}${BOLD}Uploading to Drive...${NC}"
+    echo "---------------------------------------"
+    rclone copy "$zip_path" "$BACKUP_REMOTE" --progress 2>&1
+    echo "---------------------------------------"
+
+    # Remove local temp zip
+    rm -f "$zip_path"
+    echo -e "${GREEN}${BOLD}Upload complete: ${zip_name}${NC}"
+
+    # Prune old backups on Drive — keep only the newest KEEP_BACKUPS zips
+    echo ""
+    echo -e "${CYAN}Pruning old backups (keeping last ${KEEP_BACKUPS})...${NC}"
+    mapfile -t old_backups < <(
+        rclone lsf "$BACKUP_REMOTE" --files-only 2>/dev/null \
+        | grep "^Git_projects_" | sort -r | tail -n +$((KEEP_BACKUPS + 1))
+    )
+    if [ "${#old_backups[@]}" -gt 0 ]; then
+        for f in "${old_backups[@]}"; do
+            rclone deletefile "${BACKUP_REMOTE}/${f}" 2>/dev/null
+            echo -e "  ${RED}-${NC} Deleted old backup: $f"
+        done
+    else
+        echo -e "  ${GREEN}No old backups to remove.${NC}"
+    fi
+
+    echo ""
+}
+
 # Direction menu
 echo ""
 echo -e "${CYAN}${BOLD}=== Pi5 Google Drive Copy ===${NC}"
 echo ""
-echo "  1) Drive → Pi  (download from Google Drive to Pi)"
-echo "  2) Pi → Drive  (upload from Pi to Google Drive)"
+echo "  1) Drive → Pi       (download from Google Drive to Pi)"
+echo "  2) Pi → Drive       (upload from Pi to Google Drive, file-by-file)"
+echo "  3) Zip → Drive      (zip Git_projects, upload as single archive — fast)"
 echo ""
-echo -ne "Enter choice [1/2]: "
+echo -ne "Enter choice [1/2/3]: "
 read option
 
 case "$option" in
     1) dry_run_summary "$SRC_REMOTE" "$DEST_LOCAL" "Drive → Pi" ;;
     2) dry_run_summary "$DEST_LOCAL" "$SRC_REMOTE" "Pi → Drive" ;;
+    3) zip_and_upload ;;
     *) echo -e "${RED}Invalid choice. Exiting.${NC}"; exit 1 ;;
 esac
