@@ -27,6 +27,9 @@ EXCLUDES=(
     --tpslimit-burst 2
     --drive-pacer-min-sleep 500ms
     --drive-pacer-burst 2
+    # Drive stores mtimes at ms precision; default 1ns tolerance causes false
+    # "changed" detections after upload. 2s window absorbs any rounding drift.
+    --modify-window 2s
 )
 
 # Colors
