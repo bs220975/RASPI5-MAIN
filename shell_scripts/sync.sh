@@ -156,48 +156,105 @@ function zip_and_upload() {
     echo ""
 }
 
+function browse_select() {
+    # Interactive file browser. Sets SELECTED_PATH on success, returns 1 on cancel.
+    local current="$DEST_LOCAL"
+    SELECTED_PATH=""
+
+    while true; do
+        echo ""
+        echo -e "  ${CYAN}${BOLD}Location: ${current}${NC}"
+        echo "  ──────────────────────────────────────────"
+
+        local entries=()
+        local idx=1
+
+        # Parent dir (never go above DEST_LOCAL)
+        if [ "$current" != "$DEST_LOCAL" ]; then
+            echo -e "  ${idx}) ${CYAN}..${NC}  (go up)"
+            entries[$idx]=".."
+            ((idx++))
+        fi
+
+        # Subdirectories — skip hidden build/cache dirs
+        while IFS= read -r d; do
+            local name
+            name=$(basename "$d")
+            echo -e "  ${idx}) ${YELLOW}[DIR]${NC}  ${name}"
+            entries[$idx]="$d"
+            ((idx++))
+        done < <(find "$current" -maxdepth 1 -mindepth 1 -type d \
+            ! -name ".git" ! -name ".pio" ! -name "node_modules" \
+            ! -name "__pycache__" ! -name "build" ! -name ".firebase" \
+            ! -name ".vscode" | sort)
+
+        # Files with size hint
+        while IFS= read -r f; do
+            local name fsize
+            name=$(basename "$f")
+            fsize=$(du -sh "$f" 2>/dev/null | cut -f1)
+            echo -e "  ${idx})         ${name}  ${YELLOW}(${fsize})${NC}"
+            entries[$idx]="$f"
+            ((idx++))
+        done < <(find "$current" -maxdepth 1 -mindepth 1 -type f | sort)
+
+        echo "  ──────────────────────────────────────────"
+        echo -e "  ${GREEN}u${NC}) Select THIS folder for upload"
+        echo -e "  ${RED}q${NC}) Cancel"
+        echo ""
+        echo -ne "  Choice: "
+        read sel
+
+        case "$sel" in
+            q|Q)
+                return 1
+                ;;
+            u|U)
+                SELECTED_PATH="$current"
+                return 0
+                ;;
+            ''|*[!0-9]*)
+                echo -e "  ${RED}Invalid input — enter a number, u, or q.${NC}"
+                ;;
+            *)
+                if [ -n "${entries[$sel]+x}" ]; then
+                    local chosen="${entries[$sel]}"
+                    if [ "$chosen" = ".." ]; then
+                        current="$(dirname "$current")"
+                    elif [ -d "$chosen" ]; then
+                        current="$chosen"
+                    elif [ -f "$chosen" ]; then
+                        SELECTED_PATH="$chosen"
+                        return 0
+                    fi
+                else
+                    echo -e "  ${RED}No item $sel — try again.${NC}"
+                fi
+                ;;
+        esac
+    done
+}
+
 function upload_specific() {
     echo ""
     echo -e "${CYAN}${BOLD}==== Upload Specific File/Folder → Drive ====${NC}"
-    echo ""
-    echo -e "  Enter path relative to ${YELLOW}${DEST_LOCAL}${NC} or an absolute path."
-    echo -e "  Examples: ${YELLOW}Git_projects/RASPI5-MAIN${NC}"
-    echo -e "            ${YELLOW}Git_projects/RASPI5-MAIN/main.py${NC}"
-    echo -e "            ${YELLOW}/home/pi5/pi5_drive/Git_projects/ESP32-CAM${NC}"
-    echo ""
 
-    # List top-level contents of pi5_drive as a hint
-    echo -e "  Contents of ${YELLOW}${DEST_LOCAL}${NC}:"
-    ls "$DEST_LOCAL" | sed 's/^/    /'
-    echo ""
-    echo -ne "Path: "
-    read user_path
+    browse_select || { echo -e "${YELLOW}Cancelled.${NC}"; return 0; }
+    local local_path="$SELECTED_PATH"
 
-    # Resolve to absolute path
-    if [[ "$user_path" == /* ]]; then
-        local_path="$user_path"
-    else
-        local_path="${DEST_LOCAL}/${user_path}"
-    fi
-
-    # Validate
-    if [ ! -e "$local_path" ]; then
-        echo -e "${RED}Error: Not found: ${local_path}${NC}"
-        return 1
-    fi
-
-    # Compute matching remote path (strip DEST_LOCAL prefix, prepend SRC_REMOTE)
-    rel_path="${local_path#${DEST_LOCAL}/}"
+    # Compute matching remote path
+    local rel_path="${local_path#${DEST_LOCAL}/}"
 
     echo ""
     if [ -f "$local_path" ]; then
         # ── Single file ──────────────────────────────────────────────
-        remote_dir="${SRC_REMOTE}/$(dirname "$rel_path")"
-        file_size=$(du -sh "$local_path" | cut -f1)
+        local remote_dir="${SRC_REMOTE}/$(dirname "$rel_path")"
+        local fsize
+        fsize=$(du -sh "$local_path" | cut -f1)
         echo -e "  Type   : ${YELLOW}file${NC}"
         echo -e "  Local  : ${YELLOW}${local_path}${NC}"
         echo -e "  Remote : ${YELLOW}${remote_dir}/$(basename "$local_path")${NC}"
-        echo -e "  Size   : ${YELLOW}${file_size}${NC}"
+        echo -e "  Size   : ${YELLOW}${fsize}${NC}"
         echo ""
         echo -ne "Proceed? (y/n): "
         read choice
@@ -210,7 +267,8 @@ function upload_specific() {
         echo -e "${GREEN}${BOLD}Upload complete.${NC}"
     else
         # ── Directory ────────────────────────────────────────────────
-        remote_path="${SRC_REMOTE}/${rel_path}"
+        local remote_path="${SRC_REMOTE}/${rel_path}"
+        local dir_size file_count
         dir_size=$(du -sh "$local_path" 2>/dev/null | cut -f1)
         file_count=$(find "$local_path" -type f \
             ! -path "*/.git/*" ! -path "*/.pio/*" ! -path "*/node_modules/*" \
@@ -223,8 +281,8 @@ function upload_specific() {
         echo -e "  File count : ${YELLOW}${file_count}${NC} (excluding build artefacts)"
         echo ""
         if [ "$file_count" -gt 50 ]; then
-            echo -e "  ${YELLOW}Tip: >50 files may hit Drive rate limits."
-            echo -e "  Consider option 3 (zip) for large folders.${NC}"
+            echo -e "  ${YELLOW}Tip: $file_count files may hit Drive rate limits."
+            echo -e "  Consider option 3 (zip) instead for faster upload.${NC}"
             echo ""
         fi
         echo -ne "Proceed? (y/n): "
