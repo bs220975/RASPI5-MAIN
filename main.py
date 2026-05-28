@@ -381,6 +381,7 @@ class RaspberryPiController:
 
     def _main_loop(self) -> None:
         """Main control loop - monitors sensors and handles events."""
+        _io_err_count = 0
         while self._running and not self._shutdown_event.is_set():
             try:
                 time.sleep(0.2)  # 200ms loop interval
@@ -424,7 +425,17 @@ class RaspberryPiController:
                     # Process motion event
                     self._process_motion(motion_detected)
 
+            except OSError as e:
+                if e.errno == 5:  # serial port I/O error — radar dropout
+                    _io_err_count += 1
+                    if _io_err_count == 1 or _io_err_count % 30 == 0:
+                        logger.error(f"Loop iteration error: {e} (serial I/O dropout #{_io_err_count})")
+                    time.sleep(5)
+                else:
+                    _io_err_count = 0
+                    logger.error(f"Loop iteration error: {e}")
             except Exception as e:
+                _io_err_count = 0
                 logger.error(f"Loop iteration error: {e}")
 
     def _process_motion(self, motion_detected: bool) -> None:
