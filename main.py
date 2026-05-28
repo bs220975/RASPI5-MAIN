@@ -149,15 +149,17 @@ class RaspberryPiController:
             datefmt='%Y-%m-%d %H:%M:%S'
         )
 
-        # Rotating file handler: max 1MB per file, keep 3 backups
-        # Total max log storage: 4MB (error_log.txt + .1 + .2 + .3)
+        # File handler: WARNING+ only — keeps error_log.txt as a focused error log
+        # Rotating: max 1MB per file, keep 3 backups → 4MB total, capped forever
         file_handler = logging.handlers.RotatingFileHandler(
             self.config.log_file_path,
             maxBytes=1 * 1024 * 1024,  # 1 MB
             backupCount=3
         )
+        file_handler.setLevel(logging.WARNING)
         file_handler.setFormatter(log_format)
 
+        # Console handler: INFO+ → captured by journald when running as a service
         console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setFormatter(log_format)
 
