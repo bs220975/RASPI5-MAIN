@@ -156,6 +156,92 @@ function zip_and_upload() {
     echo ""
 }
 
+function upload_specific() {
+    echo ""
+    echo -e "${CYAN}${BOLD}==== Upload Specific File/Folder → Drive ====${NC}"
+    echo ""
+    echo -e "  Enter path relative to ${YELLOW}${DEST_LOCAL}${NC} or an absolute path."
+    echo -e "  Examples: ${YELLOW}Git_projects/RASPI5-MAIN${NC}"
+    echo -e "            ${YELLOW}Git_projects/RASPI5-MAIN/main.py${NC}"
+    echo -e "            ${YELLOW}/home/pi5/pi5_drive/Git_projects/ESP32-CAM${NC}"
+    echo ""
+
+    # List top-level contents of pi5_drive as a hint
+    echo -e "  Contents of ${YELLOW}${DEST_LOCAL}${NC}:"
+    ls "$DEST_LOCAL" | sed 's/^/    /'
+    echo ""
+    echo -ne "Path: "
+    read user_path
+
+    # Resolve to absolute path
+    if [[ "$user_path" == /* ]]; then
+        local_path="$user_path"
+    else
+        local_path="${DEST_LOCAL}/${user_path}"
+    fi
+
+    # Validate
+    if [ ! -e "$local_path" ]; then
+        echo -e "${RED}Error: Not found: ${local_path}${NC}"
+        return 1
+    fi
+
+    # Compute matching remote path (strip DEST_LOCAL prefix, prepend SRC_REMOTE)
+    rel_path="${local_path#${DEST_LOCAL}/}"
+
+    echo ""
+    if [ -f "$local_path" ]; then
+        # ── Single file ──────────────────────────────────────────────
+        remote_dir="${SRC_REMOTE}/$(dirname "$rel_path")"
+        file_size=$(du -sh "$local_path" | cut -f1)
+        echo -e "  Type   : ${YELLOW}file${NC}"
+        echo -e "  Local  : ${YELLOW}${local_path}${NC}"
+        echo -e "  Remote : ${YELLOW}${remote_dir}/$(basename "$local_path")${NC}"
+        echo -e "  Size   : ${YELLOW}${file_size}${NC}"
+        echo ""
+        echo -ne "Proceed? (y/n): "
+        read choice
+        [[ "$choice" != "y" && "$choice" != "Y" ]] && { echo -e "${YELLOW}Skipped.${NC}"; return 0; }
+        echo ""
+        echo -e "${CYAN}${BOLD}Uploading...${NC}"
+        echo "---------------------------------------"
+        rclone copy "$local_path" "$remote_dir" --progress 2>&1
+        echo "---------------------------------------"
+        echo -e "${GREEN}${BOLD}Upload complete.${NC}"
+    else
+        # ── Directory ────────────────────────────────────────────────
+        remote_path="${SRC_REMOTE}/${rel_path}"
+        dir_size=$(du -sh "$local_path" 2>/dev/null | cut -f1)
+        file_count=$(find "$local_path" -type f \
+            ! -path "*/.git/*" ! -path "*/.pio/*" ! -path "*/node_modules/*" \
+            ! -path "*/__pycache__/*" ! -path "*/build/*" ! -name "*.pyc" \
+            | wc -l)
+        echo -e "  Type       : ${YELLOW}directory${NC}"
+        echo -e "  Local      : ${YELLOW}${local_path}${NC}"
+        echo -e "  Remote     : ${YELLOW}${remote_path}${NC}"
+        echo -e "  Size       : ${YELLOW}${dir_size}${NC}"
+        echo -e "  File count : ${YELLOW}${file_count}${NC} (excluding build artefacts)"
+        echo ""
+        if [ "$file_count" -gt 50 ]; then
+            echo -e "  ${YELLOW}Tip: >50 files may hit Drive rate limits."
+            echo -e "  Consider option 3 (zip) for large folders.${NC}"
+            echo ""
+        fi
+        echo -ne "Proceed? (y/n): "
+        read choice
+        [[ "$choice" != "y" && "$choice" != "Y" ]] && { echo -e "${YELLOW}Skipped.${NC}"; return 0; }
+        echo ""
+        echo -e "${CYAN}${BOLD}Uploading...${NC}"
+        echo "---------------------------------------"
+        rclone copy "$local_path" "$remote_path" "${EXCLUDES[@]}" \
+            -v --stats 3s --stats-one-line 2>&1
+        echo "---------------------------------------"
+        echo -e "${GREEN}${BOLD}Upload complete.${NC}"
+    fi
+
+    echo ""
+}
+
 # Direction menu
 echo ""
 echo -e "${CYAN}${BOLD}=== Pi5 Google Drive Copy ===${NC}"
@@ -163,13 +249,15 @@ echo ""
 echo "  1) Drive → Pi       (download from Google Drive to Pi)"
 echo "  2) Pi → Drive       (upload from Pi to Google Drive, file-by-file)"
 echo "  3) Zip → Drive      (zip Git_projects, upload as single archive — fast)"
+echo "  4) Upload specific  (choose a file or folder to upload)"
 echo ""
-echo -ne "Enter choice [1/2/3]: "
+echo -ne "Enter choice [1/2/3/4]: "
 read option
 
 case "$option" in
     1) dry_run_summary "$SRC_REMOTE" "$DEST_LOCAL" "Drive → Pi" ;;
     2) dry_run_summary "$DEST_LOCAL" "$SRC_REMOTE" "Pi → Drive" ;;
     3) zip_and_upload ;;
+    4) upload_specific ;;
     *) echo -e "${RED}Invalid choice. Exiting.${NC}"; exit 1 ;;
 esac
