@@ -37,6 +37,18 @@ All ESP device IPs and MQTT topics are identical to Pi4 — both Pis control the
 relays and sensors; only one holds the Keepalived VIP and actively receives ESP
 MQTT connections at a time.
 
+### Telegram Bot
+
+| Item | Value |
+|---|---|
+| Bot username | `@raspi22bot` |
+| Bot ID | `6525932255` |
+| Chat ID | `5820747117` |
+| Account name | `Raspi-5` |
+
+Token and chat ID are set as defaults in `config.py` (`TelegramConfig`) and can be
+overridden via `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` environment variables.
+
 ### Key Paths (on Pi5)
 
 | Path | Purpose |

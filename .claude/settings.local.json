@@ -41,7 +41,8 @@
       "Bash(sudo sed *)",
       "Bash(cp /home/pi5/pi5_drive/Git_projects/RASPI4-MAIN/local_api_server.py /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/local_api_server.py)",
       "Bash(cp /home/pi5/pi5_drive/Git_projects/RASPI4-MAIN/light_scheduler.py /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/light_scheduler.py)",
-      "Bash(flutter analyze *)"
+      "Bash(flutter analyze *)",
+      "Bash(ip route *)"
     ]
   }
 }

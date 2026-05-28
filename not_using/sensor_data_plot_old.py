@@ -12,7 +12,7 @@ def generate_and_send_sensor_plot(
     minutes_back=10,
     plot_path='/tmp/sensor_plot.png'
 ):
-    bot_token = '6457653240:AAHxGnjzebcVb9gwXJ9LyEar0ZYZ2USFCyw'
+    bot_token = '6525932255:AAFtqifGYv2Q_r7PahyGT5Rd2wHzxeWeE2s'
     chat_id = '6825638285'
     
     try:
