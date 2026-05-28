@@ -156,8 +156,8 @@ function zip_and_upload() {
     echo ""
 }
 
-function browse_select() {
-    # Interactive file browser. Sets SELECTED_PATH on success, returns 1 on cancel.
+function _terminal_browser() {
+    # Numbered terminal file browser. Sets SELECTED_PATH on success, returns 1 on cancel.
     local current="$DEST_LOCAL"
     SELECTED_PATH=""
 
@@ -233,6 +233,55 @@ function browse_select() {
                 ;;
         esac
     done
+}
+
+function browse_select() {
+    # Sets SELECTED_PATH on success, returns 1 on cancel.
+    # Uses native GTK file picker (zenity) when a display is available;
+    # falls back to terminal browser automatically over SSH.
+    SELECTED_PATH=""
+
+    local has_display=false
+    if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
+        # Verify zenity can actually reach the display
+        WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" \
+        XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+        zenity --version &>/dev/null && has_display=true
+    fi
+
+    if $has_display; then
+        echo ""
+        echo -e "  Browse for a ${YELLOW}(f)${NC}ile or ${YELLOW}(d)${NC}irectory?"
+        echo -ne "  Choice [f/d]: "
+        read ftype
+
+        local zenity_args=(
+            zenity --file-selection
+            --title="Select file or folder to upload to Drive"
+            --filename="${DEST_LOCAL}/"
+        )
+        [[ "$ftype" == "d" || "$ftype" == "D" ]] && zenity_args+=(--directory)
+
+        local result
+        result=$(WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}" \
+                 XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}" \
+                 "${zenity_args[@]}" 2>/dev/null)
+
+        if [ -n "$result" ]; then
+            # Safety: must be inside DEST_LOCAL
+            if [[ "$result" != "${DEST_LOCAL}"* ]]; then
+                echo -e "  ${RED}Selection is outside ${DEST_LOCAL} — not allowed.${NC}"
+                return 1
+            fi
+            SELECTED_PATH="$result"
+            return 0
+        fi
+
+        echo -e "  ${YELLOW}No selection — falling back to terminal browser.${NC}"
+    fi
+
+    # SSH / no display → terminal browser
+    _terminal_browser
 }
 
 function upload_specific() {
