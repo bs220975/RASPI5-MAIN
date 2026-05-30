@@ -58,6 +58,12 @@ _LP_RLY_TELEGRAM_TOPIC   = 'home/esp32/lp-rly/telegram'
 _RADAR_MOTION_TOPIC = 'home/esp32/radar2/motion'
 _RADAR_AVAIL_TOPIC  = 'home/esp32/radar2/availability'
 
+# ── Flow test (/testflow command chain) ─────────────────────────────────────
+_FLOW_TEST_TOPIC        = 'home/test/porch/flow'          # ESP32 → Pi:    JSON {t1, device}
+_ESP01_TEST_CMD_TOPIC   = 'home/test/porch/esp01/cmd'     # Pi → ESP01:    JSON {t1, t2, device}
+_ESP01_TEST_ACK_TOPIC   = 'home/test/porch/esp01/ack'     # ESP01 → Pi:    JSON {t1, t2, t3, relay}
+_RADAR_PI_STATUS_TOPIC  = 'home/test/radar/pi_status'     # Pi → ESP32:    JSON {step, ...}
+
 
 class MqttBridge:
     """
@@ -92,6 +98,8 @@ class MqttBridge:
         on_lp_rly_telegram: Optional[Callable[[str], None]] = None,
         on_radar_motion: Optional[Callable[[str], None]] = None,
         on_radar_availability: Optional[Callable[[bool], None]] = None,
+        on_flow_test: Optional[Callable[[str], None]] = None,
+        on_esp01_test_ack: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._config = config
         self._on_lobby_state        = on_lobby_state
@@ -104,6 +112,8 @@ class MqttBridge:
         self._on_lp_rly_telegram     = on_lp_rly_telegram
         self._on_radar_motion       = on_radar_motion
         self._on_radar_availability = on_radar_availability
+        self._on_flow_test          = on_flow_test
+        self._on_esp01_test_ack     = on_esp01_test_ack
         self._client: Optional[object] = None
         self._connected = False
         self._lobby_available = False
@@ -183,6 +193,14 @@ class MqttBridge:
         """Publish ON or OFF to the ESP32-LP-RLY (L-Porch-Light) command topic (QoS 1)."""
         return self._publish(_LP_RLY_CMD_TOPIC, 'ON' if state else 'OFF')
 
+    def send_esp01_test_cmd(self, payload: str) -> bool:
+        """Publish flow-test JSON to ESP01 (Pi adds T2, ESP01 responds with T3 ack)."""
+        return self._publish(_ESP01_TEST_CMD_TOPIC, payload)
+
+    def send_pi_flow_status(self, payload: str) -> bool:
+        """Publish Pi flow-test status back to ESP32-RADAR for Telegram reporting."""
+        return self._publish(_RADAR_PI_STATUS_TOPIC, payload)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -217,6 +235,8 @@ class MqttBridge:
                 (_LP_RLY_TELEGRAM_TOPIC,    1),
                 (_RADAR_MOTION_TOPIC,       1),
                 (_RADAR_AVAIL_TOPIC,        1),
+                (_FLOW_TEST_TOPIC,          1),
+                (_ESP01_TEST_ACK_TOPIC,     1),
             ])
             logger.info("MQTT bridge: subscribed to all device topics")
         else:
@@ -297,3 +317,14 @@ class MqttBridge:
             logger.info(f"MQTT: radar motion = {payload}")
             if self._on_radar_motion:
                 self._on_radar_motion(payload)
+
+        # ── Flow test chain ──────────────────────────────────────────────
+        elif topic == _FLOW_TEST_TOPIC:
+            logger.info(f"MQTT: flow test from ESP32 = {payload}")
+            if self._on_flow_test:
+                self._on_flow_test(payload)
+
+        elif topic == _ESP01_TEST_ACK_TOPIC:
+            logger.info(f"MQTT: flow test ack from ESP01 = {payload}")
+            if self._on_esp01_test_ack:
+                self._on_esp01_test_ack(payload)

@@ -272,6 +272,8 @@ class RaspberryPiController:
                 on_lp_rly_ota_status=self._on_lp_rly_ota_status,
                 on_lp_rly_telegram=self._on_lp_rly_telegram,
                 on_radar_motion=self._on_radar_motion,
+                on_flow_test=self._on_radar_flow_test,
+                on_esp01_test_ack=self._on_esp01_test_ack,
             )
             if self.mqtt_bridge.start():
                 logger.info("MQTT bridge: started")
@@ -885,6 +887,59 @@ class RaspberryPiController:
             threading.Thread(
                 target=self.telegram.send_text, args=(message,), daemon=True
             ).start()
+
+    def _on_radar_flow_test(self, payload: str) -> None:
+        """
+        Receive flow-test JSON from ESP32-RADAR, add Pi timestamp T2,
+        forward to ESP01 via MQTT, then report status back to ESP32.
+        """
+        import json
+        from datetime import timezone, timedelta
+        now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        t2 = now_ist.strftime('%H:%M:%S')
+        try:
+            data = json.loads(payload)
+            t1     = data.get('t1', '?')
+            device = data.get('device', 'ESP32')
+        except Exception:
+            t1, device = '?', 'ESP32'
+        logger.info(f'[FlowTest] received from {device}: T1={t1} — adding T2={t2}, forwarding to ESP01')
+        forwarded = False
+        if self.mqtt_bridge:
+            cmd = json.dumps({'t1': t1, 't2': t2, 'device': device}, separators=(',', ':'))
+            forwarded = self.mqtt_bridge.send_esp01_test_cmd(cmd)
+            status = json.dumps(
+                {'step': 'pi_fwd', 't1': t1, 't2': t2, 'device': device, 'forwarded': forwarded},
+                separators=(',', ':')
+            )
+            self.mqtt_bridge.send_pi_flow_status(status)
+            logger.info(f'[FlowTest] Pi status sent to ESP32: forwarded={forwarded}')
+
+    def _on_esp01_test_ack(self, payload: str) -> None:
+        """
+        Receive flow-test ack from ESP01 containing T1, T2, T3.
+        Forward the complete result to ESP32-RADAR via MQTT so it sends the
+        final Telegram summary (ESP32 is the single Telegram reporter).
+        """
+        import json
+        try:
+            data   = json.loads(payload)
+            t1     = data.get('t1', '?')
+            t2     = data.get('t2', '?')
+            t3     = data.get('t3', '?')
+            device = data.get('device', 'ESP32')
+            relay  = data.get('relay', '?')
+        except Exception:
+            t1 = t2 = t3 = device = relay = '?'
+        logger.info(f'[FlowTest] full chain: T1={t1} T2={t2} T3={t3} relay={relay}')
+        if self.mqtt_bridge:
+            status = json.dumps(
+                {'step': 'complete', 't1': t1, 't2': t2, 't3': t3,
+                 'device': device, 'relay': relay},
+                separators=(',', ':')
+            )
+            self.mqtt_bridge.send_pi_flow_status(status)
+            logger.info('[FlowTest] complete status sent to ESP32')
 
     def _push_firebase_status(self) -> None:
         """Push current Pi status snapshot to Firebase."""
