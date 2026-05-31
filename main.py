@@ -435,6 +435,9 @@ class RaspberryPiController:
                     if _io_err_count == 1 or _io_err_count % 30 == 0:
                         logger.error(f"Loop iteration error: {e} (serial I/O dropout #{_io_err_count})")
                     time.sleep(5)
+                    # Port was closed in check_motion — try to reopen
+                    if self.sensors and not self.sensors.radar.is_initialized:
+                        self.sensors.radar.initialize()
                 else:
                     _io_err_count = 0
                     logger.error(f"Loop iteration error: {e}")

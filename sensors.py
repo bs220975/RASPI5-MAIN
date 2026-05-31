@@ -214,8 +214,8 @@ class RadarSensor(BaseSensor):
                     logger.debug("Radar motion reset (timeout)")
 
             # Read and process serial data
-            if self._serial.in_waiting > 0:
-                try:
+            try:
+                if self._serial.in_waiting > 0:
                     data = self._serial.read(
                         self._serial.in_waiting
                     ).decode('ascii', errors='ignore')
@@ -225,9 +225,24 @@ class RadarSensor(BaseSensor):
                         if self._process_line(line, current_time):
                             return True
 
-                except Exception as e:
+            except OSError as e:
+                if e.errno == 5:
+                    # Close broken port immediately — prevents next in_waiting from
+                    # blocking indefinitely in the kernel and freezing all threads
+                    try:
+                        self._serial.close()
+                    except Exception:
+                        pass
+                    self._serial = None
+                    self._initialized = False
+                    logger.warning("Radar serial I/O error — port closed, will reinitialize")
+                else:
                     logger.error(f"Radar read error: {e}")
-                    self._stable_reading_count = 0
+                self._stable_reading_count = 0
+                raise  # let main loop handle sleep + reinit
+            except Exception as e:
+                logger.error(f"Radar read error: {e}")
+                self._stable_reading_count = 0
 
         return self._motion_detected
 
