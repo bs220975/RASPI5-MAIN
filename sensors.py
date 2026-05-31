@@ -672,7 +672,7 @@ class SensorManager:
         else:
             self.gpio = GPIOSensorManager(gpio_config)
 
-        if use_mocks or not SERIAL_AVAILABLE:
+        if use_mocks or not SERIAL_AVAILABLE or not radar_config.enabled:
             self.radar = MockRadarSensor(radar_config)
         else:
             self.radar = RadarSensor(radar_config)

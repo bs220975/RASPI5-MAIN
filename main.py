@@ -211,6 +211,9 @@ class RaspberryPiController:
             else:
                 logger.warning("Sensor initialization partial - some sensors unavailable")
 
+            # Pi5 has no LD2420 radar on /dev/serial0 (that port is the BT UART)
+            logger.info("Radar (LD2420): disabled (no hardware on Pi5, /dev/serial0 is BT UART)")
+
             # Pi5 has no physical reed switch — callbacks intentionally disabled
             # to prevent EMI from the 24 GHz radar triggering phantom door events.
             logger.info("Reed switch door callbacks: disabled (no hardware on Pi5)")

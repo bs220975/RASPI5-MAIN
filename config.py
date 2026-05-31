@@ -282,6 +282,7 @@ class RadarConfig:
     LD2420 radar sensor configuration.
 
     Attributes:
+        enabled: Whether radar hardware is physically connected
         port: Serial port path
         baud_rate: Serial baud rate
         motion_timeout: Seconds before motion state resets
@@ -290,6 +291,7 @@ class RadarConfig:
         sensitivity_cm: Minimum distance change to trigger
         require_stable_readings: Consecutive readings required
     """
+    enabled: bool = False   # Pi5 has no LD2420 radar attached; /dev/serial0 is BT UART
     port: str = '/dev/serial0'
     baud_rate: int = 115200
     motion_timeout: float = 2.0
