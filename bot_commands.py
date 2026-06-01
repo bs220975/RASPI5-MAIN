@@ -43,7 +43,8 @@ class BotCommandHandler:
         esp_manager: Any,  # ESPDeviceManager
         video_recorder: Any,  # VideoRecorder
         influx_logger: Optional[Any] = None,  # InfluxDBLogger
-        sensor_manager: Optional[Any] = None  # SensorManager
+        sensor_manager: Optional[Any] = None,  # SensorManager
+        mqtt_bridge: Optional[Any] = None  # MqttBridge
     ):
         self.config = config
         self.telegram = telegram_handler
@@ -51,6 +52,7 @@ class BotCommandHandler:
         self.recorder = video_recorder
         self.influx = influx_logger
         self.sensors = sensor_manager
+        self.mqtt_bridge = mqtt_bridge
         self.state = BotState()
         self._logger = logging.getLogger(__name__)
 
@@ -65,6 +67,7 @@ class BotCommandHandler:
             '/script_filename': self._cmd_script_filename,
 
             # Video controls
+            '/test_cam': self._cmd_test_cam,
             '/enable_botvideo': self._cmd_enable_bot_video,
             '/disable_botvideo': self._cmd_disable_bot_video,
             '/stop_video_rec': self._cmd_stop_video_rec,
@@ -173,11 +176,12 @@ class BotCommandHandler:
             "━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
 
             "<b>📹 Video Controls</b>\n"
+            "/test_cam — Full flow test: trigger ESP32 → MQTT → Pi records → sends video\n"
+            "/record_video &lt;sec&gt; — Record N sec, send to bot (default 10s, max 120s)\n"
             "/stop_video_rec — Stop sensor recording\n"
             "/start_video_rec — Start sensor recording\n"
-            "/disable_botvideo — Disable video to bot\n"
-            "/enable_botvideo — Enable video to bot\n"
-            "/record_video &lt;sec&gt; — Record for N seconds\n\n"
+            "/disable_botvideo — Disable auto video to bot\n"
+            "/enable_botvideo — Enable auto video to bot\n\n"
 
             "<b>🚶 Sensor Controls</b>\n"
             "/deactivate_mms_sensor — Disable motion sensor\n"
@@ -240,6 +244,8 @@ class BotCommandHandler:
             {'command': 'display_commands',      'description': 'Show all commands'},
             {'command': 'script_runtime',         'description': 'Show script uptime'},
             {'command': 'script_filename',        'description': 'Show script name'},
+            {'command': 'test_cam',               'description': 'Full flow: ESP32 → MQTT → Pi records → video sent'},
+            {'command': 'record_video',           'description': 'Record video: /record_video <sec>'},
             {'command': 'stop_video_rec',         'description': 'Stop sensor recording'},
             {'command': 'start_video_rec',        'description': 'Start sensor recording'},
             {'command': 'disable_botvideo',       'description': 'Disable video to bot'},
@@ -605,6 +611,23 @@ class BotCommandHandler:
     def _cmd_sensors_plot(self) -> None:
         """Generate sensor data plot (placeholder)"""
         self.telegram.send_text("Sensor plot feature - coming soon")
+
+    def _cmd_test_cam(self) -> None:
+        """Send TRIGGER to ESP32-RADAR via MQTT → ESP32 publishes motion ON/OFF → Pi records and sends video."""
+        if not self.mqtt_bridge:
+            self.telegram.send_text("MQTT bridge not available")
+            return
+        if not self.mqtt_bridge.is_connected:
+            self.telegram.send_text("MQTT not connected — cannot reach ESP32-RADAR")
+            return
+        ok = self.mqtt_bridge.send_radar_trigger()
+        if ok:
+            self.telegram.send_text(
+                "Test trigger sent to ESP32-RADAR.\n"
+                "ESP32 will publish motion ON → Pi records 5s → video sent here."
+            )
+        else:
+            self.telegram.send_text("Failed to publish trigger — check MQTT broker")
 
     def _cmd_record_video(self, command_text: str) -> None:
         """Record video for specified duration"""

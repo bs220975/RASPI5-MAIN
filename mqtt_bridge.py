@@ -57,6 +57,7 @@ _LP_RLY_TELEGRAM_TOPIC   = 'home/esp32/lp-rly/telegram'
 # ── Radar sensor (ESP32-RADAR at 192.168.1.87) ──────────────────────────────
 _RADAR_MOTION_TOPIC = 'home/esp32/radar2/motion'
 _RADAR_AVAIL_TOPIC  = 'home/esp32/radar2/availability'
+_RADAR_CMD_TOPIC    = 'home/esp32/radar2/cmd'          # Pi → ESP32: TRIGGER
 
 # ── Flow test (/testflow command chain) ─────────────────────────────────────
 _FLOW_TEST_TOPIC        = 'home/test/porch/flow'          # ESP32 → Pi:    JSON {t1, device}
@@ -192,6 +193,10 @@ class MqttBridge:
     def send_lp_rly_relay(self, state: bool) -> bool:
         """Publish ON or OFF to the ESP32-LP-RLY (L-Porch-Light) command topic (QoS 1)."""
         return self._publish(_LP_RLY_CMD_TOPIC, 'ON' if state else 'OFF')
+
+    def send_radar_trigger(self) -> bool:
+        """Publish TRIGGER to ESP32-RADAR cmd topic — ESP32 simulates motion ON/OFF."""
+        return self._publish(_RADAR_CMD_TOPIC, 'TRIGGER')
 
     def send_esp01_test_cmd(self, payload: str) -> bool:
         """Publish flow-test JSON to ESP01 (Pi adds T2, ESP01 responds with T3 ack)."""

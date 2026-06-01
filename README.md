@@ -31,11 +31,17 @@ reference, and troubleshooting. This file documents Pi5-specific details and cha
 | Device ID in Firebase | `RASPI-5` |
 | MQTT client ID | `raspi5-bridge` (set in `config.py`) |
 | Local API port | `5757` |
-| Mosquitto broker | hub VIP `192.168.1.100:1883` |
+| Mosquitto broker | `192.168.1.108:1883` (Pi5 direct) |
 
 All ESP device IPs and MQTT topics are identical to Pi4 — both Pis control the same
 relays and sensors; only one holds the Keepalived VIP and actively receives ESP
 MQTT connections at a time.
+
+> **Note (2026-06-01):** `mybot.service` environment variable `MQTT_HOST` changed from
+> `192.168.1.100` (shared Keepalived VIP, held by Pi4) to `192.168.1.108` (Pi5 direct IP).
+> Pi5 is now always its own MQTT broker regardless of which Pi holds the VIP.
+> ESP32-RADAR firmware `HardwareConfig.h` `MQTT_BROKER` also points to `192.168.1.108`
+> so both sides use Pi5's broker directly.
 
 ### Telegram Bot
 
@@ -120,8 +126,10 @@ Both commands call `_pi_status` first, show which Pi currently holds the VIP, an
 |---|---|
 | Porch/living-room light keeps toggling on by itself after user turns it off | Radar or LD2420 motion is still active while user manually turns light OFF — motion was firing auto-ON again; fixed in 2026-05-18: `_porch_manual_off_time` / `_living_room_manual_off_time` timestamps block auto-ON for 2 minutes after a manual OFF via app |
 | Motion auto-ON takes 2–4 minutes to re-enable after manually toggling a light | Manual OFF sets the 2-min block timer but turning ON never cleared it; each OFF→ON→OFF cycle was resetting the timer to a fresh 2 minutes; fixed in 2026-05-20: `_execute_light_cmd` / `_execute_porch_cmd` now reset `_*_manual_off_time = 0` on explicit ON |
-| Light switch in app does nothing | Check Firebase SSE streams started in log; check MQTT bridge connected to `192.168.1.100:1883` |
+| Light switch in app does nothing | Check Firebase SSE streams started in log; check MQTT bridge connected to `192.168.1.108:1883` |
 | Porch light not turning on at night | Check radar MQTT arriving (`home/esp32/radar2/motion`); check night hours 18–06; check `_porch_light_on` state |
+| Radar motion detected but no video recorded | Check `is_video_recording_enabled()` via bot; check camera initialised in log; confirm ESP32-RADAR MQTT broker is `192.168.1.108` (not `192.168.1.100`) |
+| Pi5 not receiving any ESP32 MQTT messages | ESP32-RADAR may still be pointing at Pi4's broker (`192.168.1.100`) — reflash ESP32-RADAR firmware after updating `MQTT_BROKER` in `HardwareConfig.h` to `192.168.1.108` |
 | App bulb shows permanent pending spinner when light triggered by motion or timer | `state` and `confirmed` out of sync — `_on_lobby_mqtt_state` / `_on_porch_mqtt_state` / `_on_lp_rly_mqtt_state` write both `confirmed` and `state` to Firebase; check that MQTT state callbacks are firing in the log |
 | App shows orange / VIP unreachable after toggling local routing off then back on | `LocalApiServer` thread was blocked by a half-open TCP connection (Flutter app timed out at 2 s while the Pi's socket stayed open, causing `rfile.readline()` to block forever — accept queue fills, `/ping` never responds). Fixed in 2026-05-22: switched to `ThreadingHTTPServer`. If seen on older build, `sudo systemctl restart mybot.service` clears it immediately. |
 | Duplicate door events in Firebase (`door_events` collection has two docs per open/close) | Pi5 reed switch callbacks were registered but GPIO 26 has no physical hardware — EMI from the 24 GHz radar triggered phantom events that published to `REED_DOOR/1` in parallel with Pi4. Fixed 2026-05-24: reed callbacks and `AwsIoTPublisher` disabled at startup on Pi5. |
@@ -135,6 +143,11 @@ Both commands call `_pi_status` first, show which Pi currently holds the VIP, an
 
 | Date | Change |
 |---|---|
+| 2026-06-01 | Add `/test_cam` bot command — publishes `TRIGGER` to `home/esp32/radar2/cmd` via MQTT; ESP32-RADAR receives it, simulates motion ON for 5 s then OFF; Pi5 records video and sends MP4 to Telegram bot. Full chain test without needing physical motion. |
+| 2026-06-01 | `mybot.service` `MQTT_HOST` env var changed from `192.168.1.100` (shared Keepalived VIP held by Pi4) to `192.168.1.108` (Pi5 direct IP). Pi5 was receiving no ESP32-RADAR MQTT messages because Pi4 holds the VIP and owns that broker. Pi5 is now always its own broker. |
+| 2026-06-01 | Add `RecordingResult.manual` flag to `video_recorder.py` — manual recordings (`/record_video`, `/test_cam`) always send the MP4 to Telegram regardless of the `bot_video_enabled` toggle; motion-triggered recordings still respect the toggle. |
+| 2026-06-01 | Add `/record_video <sec>` to Telegram command menu (`get_commands_list`); add `/record_video` to `/display_commands` help text. |
+| 2026-06-01 | ESP32-RADAR motion now triggers Pi5 video recording and Telegram video send — `_on_radar_motion()` in `main.py` extended: `motion=ON` starts picamera2 recording (if video recording enabled via bot) and sends throttled Telegram text alert; `motion=OFF` schedules `_check_stop_recording` after `motion_timeout` delay via `_radar_rec_stop_timer`; `_on_recording_complete` sends the MP4 to Telegram. |
 | 2026-05-24 | Disable reed switch callbacks and AWS IoT door publisher — Pi5 has no physical reed switch on GPIO 26; the pull-up pin was picking up EMI from the nearby 24 GHz radar, firing phantom door open/close events that published duplicate `REED_DOOR/1` MQTT messages to AWS IoT and created extra Firestore `door_events` documents alongside Pi4's writes. Reed callbacks and `AwsIoTPublisher` are now skipped at startup; `aws_door` remains `None` for the lifetime of the process. |
 | 2026-05-22 | Sync with Pi4: add `aws_iot_publisher.py` (Pi5 variant — `RaspberryPi5-DoorPublisher`, cert path `/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/aws_certs`); wire into `main.py` door open/close callbacks and cleanup; fix `config.py` InfluxDB org/bucket `pi4org/pi4data` → `pi5org/pi5data`; fix `bot_commands.py` `read_reed_switch()` → `read_reed()` (method name was wrong — same bug fixed in Pi4 same day) |
 | 2026-05-22 | Fix `LocalApiServer` hang — single-threaded `HTTPServer` blocked the entire accept loop when the Flutter app established a TCP connection but timed out mid-request (2 s client timeout left a half-open socket; Pi's `rfile.readline()` blocked indefinitely, filling the kernel accept queue; `/ping` appeared unreachable → app stayed orange even when Pi5 held the VRRP VIP). Fixed in `local_api_server.py` by replacing `HTTPServer` with `_ThreadingHTTPServer` (`ThreadingMixIn + HTTPServer`, `daemon_threads=True`). Same fix as RASPI4-MAIN commit `31fe337`. |

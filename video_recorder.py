@@ -41,6 +41,7 @@ class RecordingResult:
     file_path: Optional[str]
     duration: float
     error_message: Optional[str] = None
+    manual: bool = False
 
 
 class VideoRecorder:
@@ -243,14 +244,16 @@ class VideoRecorder:
                     result = RecordingResult(
                         success=True,
                         file_path=mp4_file,
-                        duration=duration
+                        duration=duration,
+                        manual=self._manual_recording
                     )
                 else:
                     result = RecordingResult(
                         success=False,
                         file_path=None,
                         duration=duration,
-                        error_message="Conversion failed"
+                        error_message="Conversion failed",
+                        manual=self._manual_recording
                     )
             else:
                 self._logger.warning(f"Recording too short: {duration:.1f}s")
@@ -259,7 +262,8 @@ class VideoRecorder:
                     success=False,
                     file_path=None,
                     duration=duration,
-                    error_message=f"Too short ({duration:.1f}s < {self.config.min_duration}s)"
+                    error_message=f"Too short ({duration:.1f}s < {self.config.min_duration}s)",
+                    manual=self._manual_recording
                 )
 
             # Trigger callback
@@ -275,7 +279,8 @@ class VideoRecorder:
                     success=False,
                     file_path=None,
                     duration=time.time() - start_time,
-                    error_message=str(e)
+                    error_message=str(e),
+                    manual=self._manual_recording
                 ))
 
         finally:

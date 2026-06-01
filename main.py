@@ -125,6 +125,9 @@ class RaspberryPiController:
         # Timestamp of last manual turn-off; blocks radar auto-ON for 2 minutes
         self._porch_manual_off_time: float = 0
 
+        # Delayed recording-stop timer for MQTT radar motion (no direct sensor on Pi5)
+        self._radar_rec_stop_timer: Optional[threading.Timer] = None
+
         # LP porch relay state (ESP32-LP-RLY / L-Porch-Light app switch)
         self._lp_rly_light_on: bool = False
         self._last_lp_rly_cmd: Optional[bool] = None
@@ -282,6 +285,10 @@ class RaspberryPiController:
                 logger.info("MQTT bridge: started")
             else:
                 logger.warning("MQTT bridge: start failed - HTTP fallback active")
+
+            # Give bot_handler a reference so /test_cam can publish to ESP32
+            if self.bot_handler:
+                self.bot_handler.mqtt_bridge = self.mqtt_bridge
 
             # Initialize local API server (LAN fallback when Firebase is down)
             logger.info("Initializing local API server...")
@@ -715,29 +722,51 @@ class RaspberryPiController:
         """
         Handle a radar motion event from ESP32-RADAR via MQTT.
 
-        During night hours (18:00–06:00) a motion=ON event turns on the
-        porch relay.  A motion=OFF event starts a 5-minute countdown; if no
-        further ON arrives within that window the relay is turned off.
+        motion=ON  → porch light (night only) + video recording + Telegram alert
+        motion=OFF → porch light off countdown + stop recording after motion timeout
         """
         motion_on = payload.upper() == 'ON'
+        current_time = time.time()
         current_hour = datetime.now().hour
         is_night = (current_hour >= 18) or (current_hour < 6)
 
         if motion_on:
-            # Cancel any pending off timer
+            self._last_motion_time = current_time
+
+            # Cancel any pending recording-stop timer (re-entry while still moving)
+            if self._radar_rec_stop_timer is not None:
+                self._radar_rec_stop_timer.cancel()
+                self._radar_rec_stop_timer = None
+
+            # ── Porch light (night only, respects manual override) ───────
             if self._porch_light_off_timer is not None:
                 self._porch_light_off_timer.cancel()
                 self._porch_light_off_timer = None
 
             if is_night and self.mqtt_bridge:
-                # Respect manual override: if user turned porch OFF within 2 min, skip
-                if time.time() - self._porch_manual_off_time < 120:
+                if current_time - self._porch_manual_off_time < 120:
                     logger.debug('Radar motion: porch manual override active — skipping auto-ON')
-                    return
-                logger.info('Radar motion ON (night) → porch relay ON')
-                self.mqtt_bridge.send_porch_relay(True)
+                else:
+                    logger.info('Radar motion ON (night) → porch relay ON')
+                    self.mqtt_bridge.send_porch_relay(True)
+
+            # ── Telegram motion notification (throttled) ─────────────────
+            cooldown = self.config.motion_message_cooldown
+            if current_time - self._last_motion_message_time > cooldown:
+                if self.telegram:
+                    self.telegram.send_text("Motion detected by ESP32 radar sensor")
+                self._last_motion_message_time = current_time
+
+            # ── Video recording ───────────────────────────────────────────
+            if self.bot_handler and self.bot_handler.is_video_recording_enabled():
+                self._handle_video_recording(current_time)
+
+            # ── Firebase status ───────────────────────────────────────────
+            if self.firebase:
+                threading.Thread(target=self._push_firebase_status, daemon=True).start()
+
         else:
-            # Motion stopped — schedule light off after 5 minutes
+            # ── Porch light off countdown ─────────────────────────────────
             if self._porch_light_on:
                 logger.info('Radar motion OFF → porch light off in 5 min')
 
@@ -750,6 +779,21 @@ class RaspberryPiController:
                 self._porch_light_off_timer = threading.Timer(300.0, _turn_off)
                 self._porch_light_off_timer.daemon = True
                 self._porch_light_off_timer.start()
+
+            # ── Recording stop after motion_timeout delay ─────────────────
+            def _delayed_stop() -> None:
+                self._check_stop_recording(time.time())
+                self._radar_rec_stop_timer = None
+
+            self._radar_rec_stop_timer = threading.Timer(
+                self.config.video.motion_timeout, _delayed_stop
+            )
+            self._radar_rec_stop_timer.daemon = True
+            self._radar_rec_stop_timer.start()
+
+            # ── Firebase status ───────────────────────────────────────────
+            if self.firebase:
+                threading.Thread(target=self._push_firebase_status, daemon=True).start()
 
     def _on_firebase_porch_light_cmd(self, cmd: bool) -> None:
         """
@@ -1019,12 +1063,16 @@ class RaspberryPiController:
     def _on_recording_complete(self, result: RecordingResult) -> None:
         """Callback when video recording completes."""
         if result.success:
-            if self.bot_handler and self.bot_handler.is_bot_video_enabled():
-                self.telegram.send_video(result.file_path)
+            # Manual recordings always send back; motion recordings respect the toggle
+            send = result.manual or (self.bot_handler and self.bot_handler.is_bot_video_enabled())
+            if send:
+                caption = f"Manual recording — {result.duration:.0f}s" if result.manual else None
+                self.telegram.send_video(result.file_path, caption=caption)
                 logger.info(f"Video sent: {result.file_path} ({result.duration:.1f}s)")
         else:
             if self.telegram:
-                self.telegram.send_text(f"Recording error: {result.error_message}")
+                label = "Manual recording" if result.manual else "Recording"
+                self.telegram.send_text(f"{label} failed: {result.error_message}")
 
     def _on_disk_cleanup(self, files_removed: int, space_freed: float) -> None:
         """Callback when disk cleanup occurs."""
@@ -1140,6 +1188,9 @@ class RaspberryPiController:
 
         if self._lp_rly_cmd_timer is not None:
             self._lp_rly_cmd_timer.cancel()
+
+        if self._radar_rec_stop_timer is not None:
+            self._radar_rec_stop_timer.cancel()
 
         if self.scheduler:
             logger.info("Stopping light scheduler...")
