@@ -85,19 +85,40 @@ python3 main.py
 ## Dual-Pi Hub Architecture
 
 Both Pi4 (`192.168.1.122`) and Pi5 (`192.168.1.108`) run `keepalived` VRRP.
-The virtual IP `192.168.1.100` floats between them — whichever starts first claims MASTER.
+The virtual IP `192.168.1.100` floats between them automatically based on `mybot.service` health.
 
 ```
-Pi4 (192.168.1.122)  ─┐
-                       ├── Keepalived VRRP ──► Hub IP 192.168.1.100
-Pi5 (192.168.1.108)  ─┘                         │
-                                                 └── Mosquitto broker
-                                                     ESP devices connect here
+Pi4 (192.168.1.122) MASTER ─┐
+                             ├── Keepalived VRRP ──► Hub IP 192.168.1.100
+Pi5 (192.168.1.108) BACKUP ─┘                         │
+                                                       └── Mosquitto broker
+                                                           ESP devices connect here
 ```
 
-- Both Pis start as `BACKUP` (`nopreempt`). First to advertise becomes MASTER.
-- VIP migrates to the standby Pi within ~3 s if the MASTER's Keepalived stops.
-- `nopreempt` — recovered Pi rejoins as BACKUP; does not reclaim VIP automatically.
+**Priority:**
+- Pi4 = 101 (MASTER), Pi5 = 100 (BACKUP)
+- Pi4 runs `check_mybot` health-check every 2 s — if `mybot.service` stops, Pi4 priority drops 101 → 81
+- Pi5 at 100 wins the election and claims the VIP within ~4 s
+- Pi4 reclaims VIP automatically when its `mybot.service` restarts (priority rises back to 101)
+
+**Auto start/stop via notify scripts (both Pis):**
+- `notify_master` → `systemctl start mybot.service` (fired when VIP is gained)
+- `notify_backup` → `systemctl stop mybot.service` (fired when VIP is lost)
+- Only one Pi runs `mybot.service` at a time — no Telegram polling conflicts
+
+**Failover triggers:**
+- Pi4 `mybot.service` stops → Pi5 takes over in ~4 s
+- Pi4 goes completely offline → Pi5 takes over in ~3 s
+
+**Config:** `OS_Migration_PI5/keepalived/keepalived.conf` — deploy to `/etc/keepalived/keepalived.conf` on Pi5. Pi4 config in `RASPI4-MAIN/OS_Migration/keepalived/keepalived.conf`.
+
+```bash
+# Check which Pi holds VIP
+ip addr show wlan0 | grep 192.168.1.100
+
+# Check keepalived state and priority
+sudo journalctl -u keepalived -n 20
+```
 
 ### VIP Handoff Commands (from `.bash_aliases`)
 
@@ -143,6 +164,7 @@ Both commands call `_pi_status` first, show which Pi currently holds the VIP, an
 
 | Date | Change |
 |---|---|
+| 2026-06-02 | Keepalived failover redesign — Pi4 is fixed MASTER (priority 101), Pi5 is BACKUP (priority 100); removed `nopreempt` from Pi5 so it preempts Pi4 when Pi4's priority drops to 81; added `notify_master`/`notify_backup` scripts on both Pis to auto-start/stop `mybot.service` on VIP gain/loss; only one bot runs at a time; Pi4 reclaims automatically when its mybot recovers. Tested end-to-end: failover in ~4 s, handback in ~7 s. |
 | 2026-06-01 | Add `/test_cam` bot command — publishes `TRIGGER` to `home/esp32/radar2/cmd` via MQTT; ESP32-RADAR receives it, simulates motion ON for 5 s then OFF; Pi5 records video and sends MP4 to Telegram bot. Full chain test without needing physical motion. |
 | 2026-06-01 | `mybot.service` `MQTT_HOST` env var changed from `192.168.1.100` (shared Keepalived VIP held by Pi4) to `192.168.1.108` (Pi5 direct IP). Pi5 was receiving no ESP32-RADAR MQTT messages because Pi4 holds the VIP and owns that broker. Pi5 is now always its own broker. |
 | 2026-06-01 | Add `RecordingResult.manual` flag to `video_recorder.py` — manual recordings (`/record_video`, `/test_cam`) always send the MP4 to Telegram regardless of the `bot_video_enabled` toggle; motion-triggered recordings still respect the toggle. |
