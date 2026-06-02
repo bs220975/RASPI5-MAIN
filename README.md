@@ -110,6 +110,17 @@ Pi5 (192.168.1.108) BACKUP ─┘                         │
 - Pi4 `mybot.service` stops → Pi5 takes over in ~4 s
 - Pi4 goes completely offline → Pi5 takes over in ~3 s
 
+**WiFi power management must be disabled on both Pis** — if the WiFi adapter sleeps, keepalived sees `wlan0 down`, enters FAULT state, fires `notify_fault` (stops mybot), drops priority, and the wrong Pi ends up as MASTER. Persistent fix applied to both Pis:
+```bash
+# Applied on both Pi4 and Pi5 — survives reboots
+# /etc/NetworkManager/conf.d/wifi-powersave-off.conf
+[connection]
+wifi.powersave = 2
+# Also applied immediately:
+sudo iw dev wlan0 set power_save off          # Pi5
+sudo nmcli con modify <SSID> 802-11-wireless.powersave 2  # Pi4
+```
+
 **Config:** `OS_Migration_PI5/keepalived/keepalived.conf` — deploy to `/etc/keepalived/keepalived.conf` on Pi5. Pi4 config in `RASPI4-MAIN/OS_Migration/keepalived/keepalived.conf`.
 
 ```bash
@@ -157,6 +168,8 @@ Both commands call `_pi_status` first, show which Pi currently holds the VIP, an
 | `mybot.service` crash-looping | Check `logs/error_log.txt`; check GPIO conflicts; check sensor hardware connected |
 | Scheduled timer not firing | Check `LightScheduler started` in log; verify `enabled=true` and valid HH:MM times in Firebase `/schedules/`; check Pi clock (`date` command) |
 | Both Pi4 and Pi5 running but only one responds to light commands | Only the Pi holding the Keepalived VIP receives ESP MQTT connections — check `ip addr show wlan0 \| grep 192.168.1.100` on each Pi |
+| Both Pis show as MASTER / split-brain (both have VIP `192.168.1.100`) | Caused by WiFi (`wlan0`) flapping on one Pi — keepalived enters FAULT, drops priority, the other Pi claims MASTER; when WiFi recovers the original Pi also reclaims MASTER before the other yields. Fix: restart keepalived on Pi5 (`sudo systemctl restart keepalived`) — it will re-enter BACKUP and yield to Pi4 (priority 101). Then disable WiFi power save on both Pis (see WiFi note in Dual-Pi section above). |
+| keepalived `(HUB_IP) Entering FAULT STATE` / `Netlink reports wlan0 down` in logs | WiFi power management put the adapter to sleep. Disable permanently: `sudo nmcli con modify <SSID> 802-11-wireless.powersave 2` + create `/etc/NetworkManager/conf.d/wifi-powersave-off.conf` with `[connection]\nwifi.powersave = 2` |
 
 ---
 
@@ -164,6 +177,7 @@ Both commands call `_pi_status` first, show which Pi currently holds the VIP, an
 
 | Date | Change |
 |---|---|
+| 2026-06-02 | Fix WiFi power management causing keepalived split-brain — `wlan0` sleep mode on both Pis caused periodic `wlan0 down` events; keepalived entered FAULT, fired `notify_fault` (stopped mybot), dropped priority, and both Pis ended up simultaneously MASTER with the VIP on both interfaces. Fixed by disabling WiFi power save permanently on both Pis via `/etc/NetworkManager/conf.d/wifi-powersave-off.conf` (`wifi.powersave = 2`) + `nmcli con modify`. Split-brain resolved by restarting Pi5 keepalived so it cleanly re-enters BACKUP and yields to Pi4 (priority 101). |
 | 2026-06-02 | Keepalived failover redesign — Pi4 is fixed MASTER (priority 101), Pi5 is BACKUP (priority 100); removed `nopreempt` from Pi5 so it preempts Pi4 when Pi4's priority drops to 81; added `notify_master`/`notify_backup` scripts on both Pis to auto-start/stop `mybot.service` on VIP gain/loss; only one bot runs at a time; Pi4 reclaims automatically when its mybot recovers. Tested end-to-end: failover in ~4 s, handback in ~7 s. |
 | 2026-06-01 | Add `/test_cam` bot command — publishes `TRIGGER` to `home/esp32/radar2/cmd` via MQTT; ESP32-RADAR receives it, simulates motion ON for 5 s then OFF; Pi5 records video and sends MP4 to Telegram bot. Full chain test without needing physical motion. |
 | 2026-06-01 | `mybot.service` `MQTT_HOST` env var changed from `192.168.1.100` (shared Keepalived VIP held by Pi4) to `192.168.1.108` (Pi5 direct IP). Pi5 was receiving no ESP32-RADAR MQTT messages because Pi4 holds the VIP and owns that broker. Pi5 is now always its own broker. |
