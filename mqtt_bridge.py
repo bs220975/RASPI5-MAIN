@@ -2,19 +2,19 @@
 MQTT bridge between local Mosquitto and the Pi home automation system.
 
 Manages four MQTT-native devices:
-  ESP01-LL-RLY    (lobby relay,      192.168.1.85)  — lobby light
-  ESP01-RELAY     (porch relay,      192.168.1.111) — porch / entrance light
-  ESP32-LP-RLY  (LP porch relay,   192.168.1.89)  — L-Porch-Light app switch
-  ESP32-RADAR     (radar sensor,     192.168.1.87)  — motion detection
+  ESP01-LL-RLY    (lower-lobby relay,  192.168.1.85)  — lower lobby light
+  ESP01-UL-RLY    (upper-lobby relay,  192.168.1.111) — upper lobby light
+  ESP32-LP-RLY  (LP porch relay,     192.168.1.89)  — L-Porch-Light app switch
+  ESP32-RADAR     (radar sensor,       192.168.1.87)  — motion detection
 
 Topics managed:
-    home/esp01/lobby/cmd/relay          Pi → ESP01-LL-RLY:   ON / OFF  (QoS 1)
-    home/esp01/lobby/state              ESP01-LL-RLY → Pi:   ON / OFF
-    home/esp01/lobby/availability       ESP01-LL-RLY → Pi:   online / offline
+    home/esp01/lower-lobby/cmd/relay    Pi → ESP01-LL-RLY:   ON / OFF  (QoS 1)
+    home/esp01/lower-lobby/state        ESP01-LL-RLY → Pi:   ON / OFF
+    home/esp01/lower-lobby/availability ESP01-LL-RLY → Pi:   online / offline
 
-    home/esp01/porch/cmd/relay          Pi → ESP01-RELAY:    ON / OFF  (QoS 1)
-    home/esp01/porch/state              ESP01-RELAY → Pi:    ON / OFF
-    home/esp01/porch/availability       ESP01-RELAY → Pi:    online / offline
+    home/esp01/upper-lobby/cmd/relay    Pi → ESP01-UL-RLY:   ON / OFF  (QoS 1)
+    home/esp01/upper-lobby/state        ESP01-UL-RLY → Pi:   ON / OFF
+    home/esp01/upper-lobby/availability ESP01-UL-RLY → Pi:   online / offline
 
     home/switches/L-Porch-Light/cmd          Pi → ESP32-LP-RLY: ON / OFF  (QoS 1)
     home/switches/L-Porch-Light/state        ESP32-LP-RLY → Pi: ON / OFF
@@ -37,15 +37,15 @@ except ImportError:
     mqtt = None  # type: ignore
     _PAHO_AVAILABLE = False
 
-# ── Lobby relay (ESP01-LL-RLY at 192.168.1.85) ─────────────────────────────
-_LOBBY_CMD_TOPIC   = 'home/esp01/lobby/cmd/relay'
-_LOBBY_STATE_TOPIC = 'home/esp01/lobby/state'
-_LOBBY_AVAIL_TOPIC = 'home/esp01/lobby/availability'
+# ── Lower-Lobby relay (ESP01-LL-RLY at 192.168.1.85) ────────────────────────
+_LL_CMD_TOPIC   = 'home/esp01/lower-lobby/cmd/relay'
+_LL_STATE_TOPIC = 'home/esp01/lower-lobby/state'
+_LL_AVAIL_TOPIC = 'home/esp01/lower-lobby/availability'
 
-# ── Porch relay (ESP01-RELAY at 192.168.1.111) ──────────────────────────────
-_PORCH_CMD_TOPIC   = 'home/esp01/porch/cmd/relay'
-_PORCH_STATE_TOPIC = 'home/esp01/porch/state'
-_PORCH_AVAIL_TOPIC = 'home/esp01/porch/availability'
+# ── Upper-Lobby relay (ESP01-UL-RLY at 192.168.1.111) ───────────────────────
+_UL_CMD_TOPIC   = 'home/esp01/upper-lobby/cmd/relay'
+_UL_STATE_TOPIC = 'home/esp01/upper-lobby/state'
+_UL_AVAIL_TOPIC = 'home/esp01/upper-lobby/availability'
 
 # ── LP Porch relay (ESP32-LP-RLY at 192.168.1.89) — app switch L-Porch-Light
 _LP_RLY_CMD_TOPIC        = 'home/switches/L-Porch-Light/cmd'
@@ -60,10 +60,10 @@ _RADAR_AVAIL_TOPIC  = 'home/esp32/radar2/availability'
 _RADAR_CMD_TOPIC    = 'home/esp32/radar2/cmd'          # Pi → ESP32: TRIGGER
 
 # ── Flow test (/testflow command chain) ─────────────────────────────────────
-_FLOW_TEST_TOPIC        = 'home/test/porch/flow'          # ESP32 → Pi:    JSON {t1, device}
-_ESP01_TEST_CMD_TOPIC   = 'home/test/porch/esp01/cmd'     # Pi → ESP01:    JSON {t1, t2, device}
-_ESP01_TEST_ACK_TOPIC   = 'home/test/porch/esp01/ack'     # ESP01 → Pi:    JSON {t1, t2, t3, relay}
-_RADAR_PI_STATUS_TOPIC  = 'home/test/radar/pi_status'     # Pi → ESP32:    JSON {step, ...}
+_FLOW_TEST_TOPIC        = 'home/test/upper-lobby/flow'          # ESP32 → Pi:    JSON {t1, device}
+_ESP01_TEST_CMD_TOPIC   = 'home/test/upper-lobby/esp01/cmd'     # Pi → ESP01:    JSON {t1, t2, device}
+_ESP01_TEST_ACK_TOPIC   = 'home/test/upper-lobby/esp01/ack'     # ESP01 → Pi:    JSON {t1, t2, t3, relay}
+_RADAR_PI_STATUS_TOPIC  = 'home/test/radar/pi_status'           # Pi → ESP32:    JSON {step, ...}
 
 
 class MqttBridge:
@@ -71,28 +71,28 @@ class MqttBridge:
     Manages the Pi's MQTT client session against local Mosquitto.
 
     Subscribes to ESP device state and availability topics.
-    Publishes relay commands to lobby and porch devices.
+    Publishes relay commands to lower-lobby and upper-lobby devices.
 
     Usage:
         bridge = MqttBridge(
             config.mqtt,
-            on_lobby_state=...,
-            on_porch_state=...,
+            on_ll_state=...,
+            on_ul_state=...,
             on_radar_motion=...,
         )
         bridge.start()
-        bridge.send_lobby_relay(True)
-        bridge.send_porch_relay(True)
+        bridge.send_ll_relay(True)
+        bridge.send_ul_relay(True)
         bridge.stop()
     """
 
     def __init__(
         self,
         config,
-        on_lobby_state: Optional[Callable[[str], None]] = None,
-        on_lobby_availability: Optional[Callable[[bool], None]] = None,
-        on_porch_state: Optional[Callable[[str], None]] = None,
-        on_porch_availability: Optional[Callable[[bool], None]] = None,
+        on_ll_state: Optional[Callable[[str], None]] = None,
+        on_ll_availability: Optional[Callable[[bool], None]] = None,
+        on_ul_state: Optional[Callable[[str], None]] = None,
+        on_ul_availability: Optional[Callable[[bool], None]] = None,
         on_lp_rly_state: Optional[Callable[[str], None]] = None,
         on_lp_rly_availability: Optional[Callable[[bool], None]] = None,
         on_lp_rly_ota_status: Optional[Callable[[str], None]] = None,
@@ -103,10 +103,10 @@ class MqttBridge:
         on_esp01_test_ack: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._config = config
-        self._on_lobby_state        = on_lobby_state
-        self._on_lobby_availability = on_lobby_availability
-        self._on_porch_state        = on_porch_state
-        self._on_porch_availability = on_porch_availability
+        self._on_ll_state           = on_ll_state
+        self._on_ll_availability    = on_ll_availability
+        self._on_ul_state           = on_ul_state
+        self._on_ul_availability    = on_ul_availability
         self._on_lp_rly_state        = on_lp_rly_state
         self._on_lp_rly_availability = on_lp_rly_availability
         self._on_lp_rly_ota_status   = on_lp_rly_ota_status
@@ -117,8 +117,8 @@ class MqttBridge:
         self._on_esp01_test_ack     = on_esp01_test_ack
         self._client: Optional[object] = None
         self._connected = False
-        self._lobby_available = False
-        self._porch_available = False
+        self._ll_available = False
+        self._ul_available = False
         self._lp_rly_available = False
 
     # ------------------------------------------------------------------
@@ -168,27 +168,27 @@ class MqttBridge:
         return self._connected
 
     @property
-    def lobby_available(self) -> bool:
+    def ll_available(self) -> bool:
         """True if ESP01-LL-RLY last published 'online'."""
-        return self._lobby_available
+        return self._ll_available
 
     @property
-    def porch_available(self) -> bool:
-        """True if ESP01-RELAY last published 'online'."""
-        return self._porch_available
+    def ul_available(self) -> bool:
+        """True if ESP01-UL-RLY last published 'online'."""
+        return self._ul_available
 
     @property
     def lp_rly_available(self) -> bool:
         """True if ESP32-LP-RLY last published 'online'."""
         return self._lp_rly_available
 
-    def send_lobby_relay(self, state: bool) -> bool:
-        """Publish ON or OFF to the lobby relay command topic (QoS 1)."""
-        return self._publish(_LOBBY_CMD_TOPIC, 'ON' if state else 'OFF')
+    def send_ll_relay(self, state: bool) -> bool:
+        """Publish ON or OFF to the lower-lobby relay command topic (QoS 1)."""
+        return self._publish(_LL_CMD_TOPIC, 'ON' if state else 'OFF')
 
-    def send_porch_relay(self, state: bool) -> bool:
-        """Publish ON or OFF to the porch relay command topic (QoS 1)."""
-        return self._publish(_PORCH_CMD_TOPIC, 'ON' if state else 'OFF')
+    def send_ul_relay(self, state: bool) -> bool:
+        """Publish ON or OFF to the upper-lobby relay command topic (QoS 1)."""
+        return self._publish(_UL_CMD_TOPIC, 'ON' if state else 'OFF')
 
     def send_lp_rly_relay(self, state: bool) -> bool:
         """Publish ON or OFF to the ESP32-LP-RLY (L-Porch-Light) command topic (QoS 1)."""
@@ -199,7 +199,7 @@ class MqttBridge:
         return self._publish(_RADAR_CMD_TOPIC, 'TRIGGER')
 
     def send_esp01_test_cmd(self, payload: str) -> bool:
-        """Publish flow-test JSON to ESP01 (Pi adds T2, ESP01 responds with T3 ack)."""
+        """Publish flow-test JSON to ESP01-UL-RLY (Pi adds T2, ESP01 responds with T3 ack)."""
         return self._publish(_ESP01_TEST_CMD_TOPIC, payload)
 
     def send_pi_flow_status(self, payload: str) -> bool:
@@ -230,10 +230,10 @@ class MqttBridge:
             self._connected = True
             logger.info("MQTT bridge: connected to broker")
             client.subscribe([
-                (_LOBBY_STATE_TOPIC,   1),
-                (_LOBBY_AVAIL_TOPIC,   1),
-                (_PORCH_STATE_TOPIC,   1),
-                (_PORCH_AVAIL_TOPIC,   1),
+                (_LL_STATE_TOPIC,           1),
+                (_LL_AVAIL_TOPIC,           1),
+                (_UL_STATE_TOPIC,           1),
+                (_UL_AVAIL_TOPIC,           1),
                 (_LP_RLY_STATE_TOPIC,       1),
                 (_LP_RLY_AVAIL_TOPIC,       1),
                 (_LP_RLY_OTA_STATUS_TOPIC,  1),
@@ -249,8 +249,8 @@ class MqttBridge:
 
     def _on_disconnect(self, client, userdata, rc) -> None:
         self._connected = False
-        self._lobby_available = False
-        self._porch_available = False
+        self._ll_available = False
+        self._ul_available = False
         self._lp_rly_available = False
         if rc != 0:
             logger.warning(
@@ -262,31 +262,31 @@ class MqttBridge:
         topic   = msg.topic
         payload = msg.payload.decode('utf-8', errors='replace').strip()
 
-        # ── Lobby relay ──────────────────────────────────────────────────
-        if topic == _LOBBY_AVAIL_TOPIC:
+        # ── Lower-Lobby relay (ESP01-LL-RLY) ────────────────────────────
+        if topic == _LL_AVAIL_TOPIC:
             available = payload.lower() == 'online'
-            self._lobby_available = available
-            logger.info(f"MQTT: lobby availability = {payload}")
-            if self._on_lobby_availability:
-                self._on_lobby_availability(available)
+            self._ll_available = available
+            logger.info(f"MQTT: lower-lobby availability = {payload}")
+            if self._on_ll_availability:
+                self._on_ll_availability(available)
 
-        elif topic == _LOBBY_STATE_TOPIC:
-            logger.info(f"MQTT: lobby state = {payload}")
-            if self._on_lobby_state:
-                self._on_lobby_state(payload)
+        elif topic == _LL_STATE_TOPIC:
+            logger.info(f"MQTT: lower-lobby state = {payload}")
+            if self._on_ll_state:
+                self._on_ll_state(payload)
 
-        # ── Porch relay ──────────────────────────────────────────────────
-        elif topic == _PORCH_AVAIL_TOPIC:
+        # ── Upper-Lobby relay (ESP01-UL-RLY) ────────────────────────────
+        elif topic == _UL_AVAIL_TOPIC:
             available = payload.lower() == 'online'
-            self._porch_available = available
-            logger.info(f"MQTT: porch availability = {payload}")
-            if self._on_porch_availability:
-                self._on_porch_availability(available)
+            self._ul_available = available
+            logger.info(f"MQTT: upper-lobby availability = {payload}")
+            if self._on_ul_availability:
+                self._on_ul_availability(available)
 
-        elif topic == _PORCH_STATE_TOPIC:
-            logger.info(f"MQTT: porch state = {payload}")
-            if self._on_porch_state:
-                self._on_porch_state(payload)
+        elif topic == _UL_STATE_TOPIC:
+            logger.info(f"MQTT: upper-lobby state = {payload}")
+            if self._on_ul_state:
+                self._on_ul_state(payload)
 
         # ── LP Porch relay (ESP32-LP-RLY / L-Porch-Light) ─────────────
         elif topic == _LP_RLY_AVAIL_TOPIC:
@@ -330,6 +330,6 @@ class MqttBridge:
                 self._on_flow_test(payload)
 
         elif topic == _ESP01_TEST_ACK_TOPIC:
-            logger.info(f"MQTT: flow test ack from ESP01 = {payload}")
+            logger.info(f"MQTT: flow test ack from ESP01-UL-RLY = {payload}")
             if self._on_esp01_test_ack:
                 self._on_esp01_test_ack(payload)

@@ -5,8 +5,8 @@ Writes live status to the existing Firebase schema (no auth required —
 database rules allow public read/write on these nodes):
 
     /devices/RASPI-5/     — Pi heartbeat (lastSeen, reachable, cpuTemp, …)
-    /devices/ESP01-LL-RLY/ — Lobby relay status (192.168.1.85)
-    /devices/esp01_relay/  — Porch relay status (192.168.1.111)
+    /devices/ESP01-LL-RLY/ — Lower-Lobby relay status (192.168.1.85)
+    /devices/esp01_relay/  — Upper-Lobby relay status (192.168.1.111)
     /lights/live/          — Live motion & light state for the Android app
 
 start_command_stream() subscribes to a Firebase RTDB SSE stream for any
@@ -124,16 +124,15 @@ class FirebaseLogger:
 
         return ok
 
-    def push_porch_relay_status(
+    def push_ul_relay_status(
         self,
         reachable: bool,
         relay_on: bool,
     ) -> bool:
         """
-        Update /devices/esp01_relay/ with the porch relay (192.168.1.111) status.
+        Update /devices/esp01_relay/ with the upper-lobby relay (192.168.1.111) status.
 
-        Written by Pi when it receives ESP01-RELAY state via MQTT — replaces the
-        heartbeat that ESP32-RADAR previously sent via checkESP01Health().
+        Written by Pi when it receives ESP01-UL-RLY state via MQTT.
         """
         data: Dict[str, Any] = {
             'lastSeen':   _ms_now(),
@@ -166,13 +165,13 @@ class FirebaseLogger:
         self._patch('lights/lower_porch_light', {'confirmed': relay_on, 'lastUpdate': _ms_now()})
         return ok
 
-    def push_lobby_relay_status(
+    def push_ll_relay_status(
         self,
         reachable: bool,
         relay_on: bool,
     ) -> bool:
         """
-        Update /devices/ESP01-LL-RLY/ with the ESP01 at 192.168.1.85 status.
+        Update /devices/ESP01-LL-RLY/ with the lower-lobby relay (192.168.1.85) status.
 
         Called by the Pi after each successful (or failed) poll of the relay.
 

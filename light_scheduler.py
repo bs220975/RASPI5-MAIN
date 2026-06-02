@@ -40,13 +40,13 @@ class LightScheduler:
 
     def __init__(
         self,
-        send_lobby:  Callable[[bool], None],
-        send_porch:  Callable[[bool], None],
+        send_ll:     Callable[[bool], None],
+        send_ul:     Callable[[bool], None],
         send_lp_rly: Callable[[bool], None],
     ) -> None:
         self._relay_fns: Dict[str, Callable[[bool], None]] = {
-            'living_room':       send_lobby,
-            'lobby':             send_porch,
+            'living_room':       send_ll,
+            'lobby':             send_ul,
             'lower_porch_light': send_lp_rly,
         }
         self._scheduler = BackgroundScheduler(daemon=True) if _APS_AVAILABLE else None
