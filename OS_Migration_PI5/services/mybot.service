@@ -24,8 +24,10 @@ Environment="MQTT_HOST=192.168.1.108"
 StandardOutput=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Output_mybot_service.log
 StandardError=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Error_mybot_service.log
 
-# Restart policy — restart on any exit (crash, OOM, signal, etc.)
-Restart=always
+# Restart policy — restart on crash/OOM/signal only, NOT on explicit systemctl stop.
+# Keepalived uses systemctl stop (notify_backup/fault) to control mybot — Restart=always
+# would fight keepalived and rapidly cycle through StartLimitBurst, triggering a reboot.
+Restart=on-failure
 RestartSec=10
 
 # If it crashes 5 times within 5 minutes → reboot the Pi
