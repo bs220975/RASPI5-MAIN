@@ -125,6 +125,9 @@ class RaspberryPiController:
         # Timestamp of last manual turn-off; blocks radar auto-ON for 2 minutes
         self._ul_manual_off_time: float = 0
 
+        # Lower-lobby off timer — radar motion triggers LL-RLY same as UL-RLY
+        self._ll_light_off_timer: Optional[threading.Timer] = None
+
         # Delayed recording-stop timer for MQTT radar motion (no direct sensor on Pi5)
         self._radar_rec_stop_timer: Optional[threading.Timer] = None
 
@@ -732,10 +735,13 @@ class RaspberryPiController:
                 self._radar_rec_stop_timer.cancel()
                 self._radar_rec_stop_timer = None
 
-            # ── Upper-lobby light (night only, respects manual override) ──
+            # ── Upper-lobby + lower-lobby lights (night only, respect manual overrides) ──
             if self._ul_light_off_timer is not None:
                 self._ul_light_off_timer.cancel()
                 self._ul_light_off_timer = None
+            if self._ll_light_off_timer is not None:
+                self._ll_light_off_timer.cancel()
+                self._ll_light_off_timer = None
 
             if is_night and self.mqtt_bridge:
                 if current_time - self._ul_manual_off_time < 120:
@@ -743,6 +749,12 @@ class RaspberryPiController:
                 else:
                     logger.info('Radar motion ON (night) → upper-lobby relay ON')
                     self.mqtt_bridge.send_ul_relay(True)
+
+                if current_time - self._living_room_manual_off_time < 120:
+                    logger.debug('Radar motion: lower-lobby manual override active — skipping auto-ON')
+                else:
+                    logger.info('Radar motion ON (night) → lower-lobby relay ON')
+                    self.mqtt_bridge.send_ll_relay(True)
 
             # ── Telegram motion notification (throttled) ─────────────────
             cooldown = self.config.motion_message_cooldown
@@ -774,6 +786,20 @@ class RaspberryPiController:
                 self._ul_light_off_timer.daemon = True
                 self._ul_light_off_timer.start()
 
+            # ── Lower-lobby light off countdown ──────────────────────────
+            if self._last_living_room_cmd:
+                logger.info('Radar motion OFF → lower-lobby light off in 5 min')
+
+                def _turn_off_ll() -> None:
+                    if self.mqtt_bridge:
+                        logger.info('Lower-lobby light off timer fired')
+                        self.mqtt_bridge.send_ll_relay(False)
+                    self._ll_light_off_timer = None
+
+                self._ll_light_off_timer = threading.Timer(300.0, _turn_off_ll)
+                self._ll_light_off_timer.daemon = True
+                self._ll_light_off_timer.start()
+
             # ── Recording stop after motion_timeout delay ─────────────────
             def _delayed_stop() -> None:
                 self._check_stop_recording(time.time())
@@ -789,7 +815,7 @@ class RaspberryPiController:
             if self.firebase:
                 threading.Thread(target=self._push_firebase_status, daemon=True).start()
 
-    def _on_firebase_ul_cmd(self, cmd: bool) -> None: bc2c9a8 (rename: lower-lobby / upper-lobby throughout (lobby/porch → ll/ul))
+    def _on_firebase_ul_cmd(self, cmd: bool) -> None:
         """
         Handle an upper-lobby light command from the Firebase SSE stream (lights/lobby/state).
 
@@ -1179,6 +1205,9 @@ class RaspberryPiController:
 
         if self._light_cmd_timer is not None:
             self._light_cmd_timer.cancel()
+
+        if self._ll_light_off_timer is not None:
+            self._ll_light_off_timer.cancel()
 
         if self._lp_rly_cmd_timer is not None:
             self._lp_rly_cmd_timer.cancel()
