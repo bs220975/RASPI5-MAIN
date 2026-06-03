@@ -99,9 +99,10 @@ Pi5 (192.168.1.108) BACKUP ─┘                         │
 ```
 
 **Priority:**
-- Pi4 = 101 (always MASTER while keepalived is running), Pi5 = 100 (BACKUP)
-- Pi4 reclaims VIP automatically after any restart
-- Pi5 takes over only when Pi4's keepalived or wlan0 goes down
+- Pi4 = 101 base (MASTER); effective priority drops to 81 when `mybot.service` is inactive (`check_mybot weight -20`)
+- Pi5 = 100 (BACKUP) — preempts Pi4 when Pi4's effective priority falls to 81
+- Pi4 reclaims VIP automatically once its mybot recovers (priority restored to 101)
+- Pi5 takes over when Pi4's keepalived stops, wlan0 goes down, **or mybot.service stops/crashes**
 
 **keepalived is fully decoupled from mybot.service** — no `check_mybot` script,
 no `notify_master/backup/fault` hooks. Keepalived manages only the VIP. Both Pis
@@ -280,6 +281,7 @@ LD2420 (wired to ESP32-RADAR at 192.168.1.87)
 
 | Date | Change |
 |---|---|
+| 2026-06-03 | Add `vrrp_script check_mybot` to Pi4 keepalived config (Pi4 repo) — `weight -20` drops Pi4 effective priority from 101 to 81 when `mybot.service` is not active; Pi5 (priority 100) preempts and claims VIP so ESP devices reconnect to Pi5's broker; no notify scripts so no circular dependency; failover ~10 s, handback ~10 s after mybot recovers. Pi5 keepalived config unchanged. |
 | 2026-06-03 | Fix `mybot.service` not restarting after reboot when internet is not yet ready — (1) `After=network.target` → `After=network-online.target` so systemd waits for DNS before starting; (2) `StartLimitIntervalSec` + `OnFailure` moved from `[Service]` to `[Unit]` section where they are valid (were silently ignored before, so the 5-crash → reboot safety net was not working); (3) bare `return` on init failure replaced with `sys.exit(1)` so `Restart=on-failure` actually triggers when the service starts before internet is ready. Verified: full cold reboot with Pi4 as MASTER, Pi5 stays BACKUP — all services healthy after reboot. |
 | 2026-06-03 | Add `RecordingResult.trigger` field (`"radar"`, `"local"`, `"manual"`) to `video_recorder.py` — `start_recording()` accepts `trigger` param; `_on_recording_complete` uses it to set a descriptive Telegram video caption (`"ESP32 Radar motion — 22s"` / `"Motion detected — Xs"` / `"Manual recording — Xs"`) instead of sending videos with no caption. |
 | 2026-06-03 | Add mosquitto radar topic bridge on Pi5 (`/etc/mosquitto/conf.d/radar-bridge.conf`, `OS_Migration_PI5/configs/mosquitto-radar-bridge.conf`) — bridges `home/esp32/radar2/motion` and `home/esp32/radar2/availability` from VIP broker to Pi5's local mosquitto; Pi5's camera now records and sends radar-triggered video to Pi5's Telegram at all times, regardless of MASTER/BACKUP state. |
