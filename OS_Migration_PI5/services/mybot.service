@@ -1,8 +1,11 @@
 [Unit]
 Description=My ESP32 Bot Service
-After=network.target
-# Restart if network comes back after being down
+After=network-online.target
 Wants=network-online.target
+# If it crashes 5 times within 5 minutes → reboot the Pi
+StartLimitBurst=5
+StartLimitIntervalSec=300
+OnFailure=systemd-reboot.service
 
 [Service]
 Type=simple
@@ -20,19 +23,13 @@ Environment="XAUTHORITY=/home/pi5/.Xauthority"
 Environment="MQTT_HOST=localhost"
 
 # Logging: Python logging writes to stdout; telepot network timeout noise goes to stderr.
-# Capture structured Python logs to the output file; suppress the raw telepot stderr flood.
 StandardOutput=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Output_mybot_service.log
 StandardError=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Error_mybot_service.log
 
-# Restart policy — restart on crash/OOM/signal only, NOT on explicit systemctl stop.
-# Restart=always would cycle rapidly through StartLimitBurst after 5 failures, triggering a reboot.
+# Restart on crash/OOM/signal only (exit 0 = explicit stop, won't restart).
 Restart=on-failure
 RestartSec=10
-
-# If it crashes 5 times within 5 minutes → reboot the Pi
 StartLimitBurst=5
-StartLimitIntervalSec=300
-OnFailure=systemd-reboot.service
 
 [Install]
 WantedBy=multi-user.target

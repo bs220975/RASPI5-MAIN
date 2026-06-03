@@ -341,7 +341,7 @@ class RaspberryPiController:
         """Start the main control loop."""
         if not self.initialize():
             logger.error("Initialization failed, exiting")
-            return
+            sys.exit(1)  # non-zero so systemd Restart=on-failure retries
 
         # Send startup notification
         self._send_startup_message()
