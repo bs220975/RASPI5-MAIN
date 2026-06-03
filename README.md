@@ -38,10 +38,12 @@ All ESP device IPs and MQTT topics are identical to Pi4 — both Pis control the
 relays and sensors; only one holds the Keepalived VIP and actively receives ESP
 MQTT connections at a time.
 
-> **Note (2026-06-02):** All MQTT brokers reverted to Keepalived VIP `192.168.1.100`.
-> `mybot.service` `MQTT_HOST`, ESP32-RADAR firmware, and ESP01-UL-RLY firmware all use
-> `192.168.1.100` so failover between Pi4 and Pi5 is fully transparent — no reconfiguration
-> needed when the MASTER changes.
+> **Note (2026-06-03):** `mybot.service` `MQTT_HOST` is `localhost` on both Pis.
+> ESP devices still connect to the Keepalived VIP `192.168.1.100`, so only the MASTER
+> Pi's broker has ESP clients — Pi5's mybot processes ESP MQTT only when Pi5 holds the VIP.
+> Pi5 receives ESP32-RADAR motion events at all times via a mosquitto topic bridge
+> (`OS_Migration_PI5/configs/mosquitto-radar-bridge.conf`) so Pi5's camera records
+> independently regardless of MASTER/BACKUP state.
 
 ### Telegram Bot
 
@@ -84,8 +86,9 @@ python3 main.py
 
 ## Dual-Pi Hub Architecture
 
-Both Pi4 (`192.168.1.122`) and Pi5 (`192.168.1.108`) run `keepalived` VRRP.
-The virtual IP `192.168.1.100` floats between them automatically based on `mybot.service` health.
+Both Pi4 (`192.168.1.122`) and Pi5 (`192.168.1.108`) run `keepalived` VRRP and
+`mybot.service` simultaneously. The virtual IP `192.168.1.100` floats between them
+— only the MASTER Pi's mosquitto broker receives ESP device connections.
 
 ```
 Pi4 (192.168.1.122) MASTER ─┐
@@ -96,59 +99,80 @@ Pi5 (192.168.1.108) BACKUP ─┘                         │
 ```
 
 **Priority:**
-- Pi4 = 101 (MASTER), Pi5 = 100 (BACKUP)
-- Pi4 runs `check_mybot` health-check every 2 s — if `mybot.service` stops, Pi4 priority drops 101 → 81
-- Pi5 at 100 wins the election and claims the VIP within ~4 s
-- Pi4 reclaims VIP automatically when its `mybot.service` restarts (priority rises back to 101)
+- Pi4 = 101 (always MASTER while keepalived is running), Pi5 = 100 (BACKUP)
+- Pi4 reclaims VIP automatically after any restart
+- Pi5 takes over only when Pi4's keepalived or wlan0 goes down
 
-**Auto start/stop via notify scripts (both Pis):**
-- `notify_master` → `systemctl start mybot.service` (fired when VIP is gained)
-- `notify_backup` → `systemctl stop mybot.service` (fired when VIP is lost)
-- Only one Pi runs `mybot.service` at a time — no Telegram polling conflicts
+**keepalived is fully decoupled from mybot.service** — no `check_mybot` script,
+no `notify_master/backup/fault` hooks. Keepalived manages only the VIP. Both Pis
+run `mybot.service` independently under systemd at all times.
 
-**Failover triggers:**
-- Pi4 `mybot.service` stops → Pi5 takes over in ~4 s
-- Pi4 goes completely offline → Pi5 takes over in ~3 s
+**MQTT isolation — no duplication:**
+- Both Pis use `MQTT_HOST=localhost`
+- When Pi4 is MASTER: ESP devices connect to VIP = Pi4's mosquitto. Pi4's mybot
+  receives all ESP messages. Pi5's local mosquitto has no ESP clients → Pi5's mybot
+  processes nothing.
+- When Pi5 becomes MASTER: ESP devices reconnect to VIP = Pi5's mosquitto. Pi5's
+  mybot automatically starts processing — no intervention needed.
 
-**WiFi power management must be disabled on both Pis** — if the WiFi adapter sleeps, keepalived sees `wlan0 down`, enters FAULT state, fires `notify_fault` (stops mybot), drops priority, and the wrong Pi ends up as MASTER. Persistent fix applied to both Pis:
+**Pi5 radar bridge (always-on camera recording):**
+Pi5's mosquitto bridges only the two ESP32-RADAR topics from the VIP broker, so
+Pi5's camera records motion events and sends video to Pi5's Telegram regardless of
+whether Pi5 is MASTER or BACKUP. Config:
+`OS_Migration_PI5/configs/mosquitto-radar-bridge.conf` → deploy to
+`/etc/mosquitto/conf.d/radar-bridge.conf` on Pi5.
+
+**Split-brain prevention (Pi5):**
+A systemd drop-in (`OS_Migration_PI5/keepalived/keepalived-wait-for-wlan.conf`)
+delays Pi5's keepalived startup until wlan0 has its IP and is stable. Without this,
+Pi5's wlan0 flaps ~4 s after boot, Pi5 misses Pi4's VRRP adverts, and both Pis
+claim MASTER simultaneously. Deploy to
+`/etc/systemd/system/keepalived.service.d/wait-for-wlan.conf` on Pi5.
+
+**advert_int = 2 on both Pis** — extends `master_down_interval` to ~6.6 s,
+giving extra tolerance for brief WiFi gaps before a BACKUP claims MASTER.
+
+**WiFi power management must be disabled on both Pis:**
 ```bash
-# Applied on both Pi4 and Pi5 — survives reboots
-# /etc/NetworkManager/conf.d/wifi-powersave-off.conf
+# Persistent — survives reboots (/etc/NetworkManager/conf.d/wifi-powersave-off.conf)
 [connection]
 wifi.powersave = 2
-# Also applied immediately:
-sudo iw dev wlan0 set power_save off          # Pi5
-sudo nmcli con modify <SSID> 802-11-wireless.powersave 2  # Pi4
+# Immediate
+sudo iw dev wlan0 set power_save off
+sudo nmcli con modify <SSID> 802-11-wireless.powersave 2
 ```
 
-**Config:** `OS_Migration_PI5/keepalived/keepalived.conf` — deploy to `/etc/keepalived/keepalived.conf` on Pi5. Pi4 config in `RASPI4-MAIN/OS_Migration/keepalived/keepalived.conf`.
+**Config files:**
+- Pi5 keepalived: `OS_Migration_PI5/keepalived/keepalived.conf` → `/etc/keepalived/keepalived.conf`
+- Pi5 startup delay: `OS_Migration_PI5/keepalived/keepalived-wait-for-wlan.conf` → `/etc/systemd/system/keepalived.service.d/wait-for-wlan.conf`
+- Pi5 radar bridge: `OS_Migration_PI5/configs/mosquitto-radar-bridge.conf` → `/etc/mosquitto/conf.d/radar-bridge.conf`
+- Pi4 keepalived: `RASPI4-MAIN/OS_Migration/keepalived/keepalived.conf` → `/etc/keepalived/keepalived.conf` on Pi4
 
 ```bash
 # Check which Pi holds VIP
 ip addr show wlan0 | grep 192.168.1.100
 
-# Check keepalived state and priority
+# Check keepalived state
 sudo journalctl -u keepalived -n 20
+
+# Check radar bridge is connected
+sudo journalctl -u mosquitto | grep -i bridge
 ```
 
 ### VIP Handoff Commands (from `.bash_aliases`)
 
-Run these from **Pi5** to transfer the active MASTER role between Pis. Both commands first print current status and ask for confirmation before acting.
+Run these from **Pi5** to transfer the active MASTER role between Pis. Both commands
+print current status and ask for confirmation before acting.
 
 | Command | Action |
 |---|---|
-| `makepi5master` | Stop Pi4 services → start Pi5 services → Pi5 claims the VIP |
-| `makepi4master` | Stop Pi5 services → start Pi4 services → Pi4 claims the VIP |
+| `makepi5master` | Stop Pi4 keepalived → Pi5 claims VIP |
+| `makepi4master` | Stop Pi5 keepalived → Pi4 claims VIP |
 
 ```bash
-# Transfer VIP to Pi5 (run from Pi5)
-makepi5master
-
-# Transfer VIP to Pi4 (run from Pi5)
-makepi4master
+makepi5master   # Transfer VIP to Pi5 (run from Pi5)
+makepi4master   # Transfer VIP to Pi4 (run from Pi5)
 ```
-
-Both commands call `_pi_status` first, show which Pi currently holds the VIP, and abort if the target is already MASTER.
 
 ---
 
@@ -236,16 +260,18 @@ LD2420 (wired to ESP32-RADAR at 192.168.1.87)
 | Motion auto-ON takes 2–4 minutes to re-enable after manually toggling a light | Manual OFF sets the 2-min block timer but turning ON never cleared it; each OFF→ON→OFF cycle was resetting the timer to a fresh 2 minutes; fixed in 2026-05-20: `_execute_light_cmd` / `_execute_porch_cmd` now reset `_*_manual_off_time = 0` on explicit ON |
 | Light switch in app does nothing | Check Firebase SSE streams started in log; check MQTT bridge connected to `192.168.1.108:1883` |
 | Porch light not turning on at night | Check radar MQTT arriving (`home/esp32/radar2/motion`); check night hours 18–06; check `_porch_light_on` state |
-| Radar motion detected but no video recorded | Check `is_video_recording_enabled()` via bot; check camera initialised in log; confirm ESP32-RADAR MQTT broker is `192.168.1.108` (not `192.168.1.100`) |
-| Pi5 not receiving any ESP32 MQTT messages | All ESP devices use VIP `192.168.1.100`; Pi5's `mybot.service` must also use `MQTT_HOST=192.168.1.100`. If Pi5 is MASTER (holds VIP), check `ip addr show wlan0 \| grep 192.168.1.100`. If Pi4 holds the VIP, Pi5's mybot should not be running (keepalived `notify_backup` stops it). |
+| Radar motion detected but no video recorded | Check `is_video_recording_enabled()` via bot; check camera initialised in log (`Video recorder: OK`); check mosquitto radar bridge is running (`sudo journalctl -u mosquitto \| grep bridge`) |
+| Pi5 not receiving ESP32-RADAR MQTT messages | Check mosquitto radar bridge: `sudo journalctl -u mosquitto \| grep -i bridge`. Bridge subscribes to `home/esp32/radar2/#` on VIP broker and republishes locally. If bridge is down, restart mosquitto on Pi5. |
+| Pi5 not receiving relay/sensor ESP MQTT messages | Expected when Pi5 is BACKUP — `MQTT_HOST=localhost` means Pi5's mybot only processes ESP messages when Pi5 holds the VIP (ESPs connect to VIP broker). This is by design — no duplication between Pis. |
 | App bulb shows permanent pending spinner when light triggered by motion or timer | `state` and `confirmed` out of sync — `_on_lobby_mqtt_state` / `_on_porch_mqtt_state` / `_on_lp_rly_mqtt_state` write both `confirmed` and `state` to Firebase; check that MQTT state callbacks are firing in the log |
 | App shows orange / VIP unreachable after toggling local routing off then back on | `LocalApiServer` thread was blocked by a half-open TCP connection (Flutter app timed out at 2 s while the Pi's socket stayed open, causing `rfile.readline()` to block forever — accept queue fills, `/ping` never responds). Fixed in 2026-05-22: switched to `ThreadingHTTPServer`. If seen on older build, `sudo systemctl restart mybot.service` clears it immediately. |
 | Duplicate door events in Firebase (`door_events` collection has two docs per open/close) | Pi5 reed switch callbacks were registered but GPIO 26 has no physical hardware — EMI from the 24 GHz radar triggered phantom events that published to `REED_DOOR/1` in parallel with Pi4. Fixed 2026-05-24: reed callbacks and `AwsIoTPublisher` disabled at startup on Pi5. |
 | `mybot.service` crash-looping | Check `logs/error_log.txt`; check GPIO conflicts; check sensor hardware connected |
 | Scheduled timer not firing | Check `LightScheduler started` in log; verify `enabled=true` and valid HH:MM times in Firebase `/schedules/`; check Pi clock (`date` command) |
 | Both Pi4 and Pi5 running but only one responds to light commands | Only the Pi holding the Keepalived VIP receives ESP MQTT connections — check `ip addr show wlan0 \| grep 192.168.1.100` on each Pi |
-| Both Pis show as MASTER / split-brain (both have VIP `192.168.1.100`) | Caused by WiFi (`wlan0`) flapping on one Pi — keepalived enters FAULT, drops priority, the other Pi claims MASTER; when WiFi recovers the original Pi also reclaims MASTER before the other yields. Fix: restart keepalived on Pi5 (`sudo systemctl restart keepalived`) — it will re-enter BACKUP and yield to Pi4 (priority 101). Then disable WiFi power save on both Pis (see WiFi note in Dual-Pi section above). |
-| keepalived `(HUB_IP) Entering FAULT STATE` / `Netlink reports wlan0 down` in logs | WiFi power management put the adapter to sleep. Disable permanently: `sudo nmcli con modify <SSID> 802-11-wireless.powersave 2` + create `/etc/NetworkManager/conf.d/wifi-powersave-off.conf` with `[connection]\nwifi.powersave = 2` |
+| Both Pis show as MASTER / split-brain (both have VIP `192.168.1.100`) | Usually caused by Pi5's wlan0 flapping ~4 s after keepalived starts — Pi5 misses Pi4's adverts and claims MASTER. Fixed by the `wait-for-wlan.conf` startup delay drop-in on Pi5. If it still occurs, run `makepi4master` to resolve manually. |
+| keepalived `(HUB_IP) Entering FAULT STATE` / `Netlink reports wlan0 down` in logs | Pi5's wlan0 flapped during startup — suppressed by `wait-for-wlan.conf` startup delay. If it persists at runtime, check WiFi power save: `iwconfig wlan0 \| grep Power` — should say `Power Management:off`. |
+| `advertisement interval mismatch` in keepalived logs | `advert_int` differs between Pi4 and Pi5 — must be identical (currently `2` on both). Check `/etc/keepalived/keepalived.conf` on both Pis. |
 
 ---
 
@@ -253,6 +279,11 @@ LD2420 (wired to ESP32-RADAR at 192.168.1.87)
 
 | Date | Change |
 |---|---|
+| 2026-06-03 | Add `RecordingResult.trigger` field (`"radar"`, `"local"`, `"manual"`) to `video_recorder.py` — `start_recording()` accepts `trigger` param; `_on_recording_complete` uses it to set a descriptive Telegram video caption (`"ESP32 Radar motion — 22s"` / `"Motion detected — Xs"` / `"Manual recording — Xs"`) instead of sending videos with no caption. |
+| 2026-06-03 | Add mosquitto radar topic bridge on Pi5 (`/etc/mosquitto/conf.d/radar-bridge.conf`, `OS_Migration_PI5/configs/mosquitto-radar-bridge.conf`) — bridges `home/esp32/radar2/motion` and `home/esp32/radar2/availability` from VIP broker to Pi5's local mosquitto; Pi5's camera now records and sends radar-triggered video to Pi5's Telegram at all times, regardless of MASTER/BACKUP state. |
+| 2026-06-03 | Decouple keepalived from mybot.service on both Pis — removed `vrrp_script check_mybot`, `track_script`, and all `notify_master/backup/fault` hooks; keepalived now manages only the VIP; `mybot.service` runs independently on both Pis under systemd; eliminates the circular dependency (keepalived restart → notify_backup stops mybot → check_mybot fails → Pi4 priority drops 101→81 → split-brain). |
+| 2026-06-03 | Fix MQTT duplication — `MQTT_HOST` changed from `192.168.1.100` to `localhost` on both Pis; both Pis were previously connecting to the same VIP broker, subscribing to all ESP topics, and processing every message twice (duplicate Telegram alerts, duplicate Firebase writes); with localhost, only the MASTER Pi's mybot receives ESP messages. |
+| 2026-06-03 | Fix keepalived split-brain on Pi5 startup — Pi5's wlan0 flaps ~4 s after boot (WiFi reassociation); Pi5 enters FAULT → BACKUP → MASTER in ~12 s before it can hear Pi4's adverts; fixed with systemd startup delay drop-in `/etc/systemd/system/keepalived.service.d/wait-for-wlan.conf` (waits for `192.168.1.108` on wlan0 then 5 s buffer); also increased `advert_int` 1 → 2 on both Pis to extend `master_down_interval` from ~3.6 s to ~6.6 s. |
 | 2026-06-02 | Revert all MQTT brokers back to Keepalived VIP `192.168.1.100` — ESP32-RADAR firmware, ESP01-UL-RLY firmware, and Pi5 `mybot.service` `MQTT_HOST` all changed back from `192.168.1.108` to `192.168.1.100`; this ensures whichever Pi is MASTER handles all MQTT without any device needing reconfiguration on failover. Both devices OTA-flashed. |
 | 2026-06-02 | Add "Two-Floor Sensor & Relay Assignment" section to README — documents that Pi4 (lower lobby, RASPI4-MAIN) has LD2420 wired directly on serial and controls ESP01-LL-RLY (`192.168.1.85`), while Pi5 (upper lobby, RASPI5-MAIN) receives radar motion from ESP32-RADAR over MQTT and controls ESP01-UL-RLY (`192.168.1.111`). |
 | 2026-06-02 | Fix ESP32-RADAR motion not turning on lower-lobby light (ESP01-LL-RLY) — `_on_radar_motion()` only called `send_ul_relay(True)`; added `send_ll_relay(True)` (night only, respects 2-min manual-OFF override via `_living_room_manual_off_time`); added `_ll_light_off_timer` to turn LL-RLY OFF 5 min after motion stops, matching the existing UL-RLY behaviour. |

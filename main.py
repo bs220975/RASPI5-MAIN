@@ -478,7 +478,7 @@ class RaspberryPiController:
 
             # Handle video recording
             if self.bot_handler and self.bot_handler.is_video_recording_enabled():
-                self._handle_video_recording(current_time)
+                self._handle_video_recording(current_time, trigger="local")
 
             # Handle InfluxDB logging
             self._handle_influx_logging(motion_detected, motion_state_changed, current_time)
@@ -765,7 +765,7 @@ class RaspberryPiController:
 
             # ── Video recording ───────────────────────────────────────────
             if self.bot_handler and self.bot_handler.is_video_recording_enabled():
-                self._handle_video_recording(current_time)
+                self._handle_video_recording(current_time, trigger="radar")
 
             # ── Firebase status ───────────────────────────────────────────
             if self.firebase:
@@ -1024,7 +1024,7 @@ class RaspberryPiController:
         except Exception as e:
             logger.warning(f"Firebase status push error: {e}")
 
-    def _handle_video_recording(self, current_time: float) -> None:
+    def _handle_video_recording(self, current_time: float, trigger: str = "motion") -> None:
         """Handle video recording logic."""
         if not self.recorder:
             return
@@ -1032,8 +1032,8 @@ class RaspberryPiController:
         if not self.recorder.is_recording:
             self._recording_start_time = current_time
             filename = time.strftime("%d%b%y_%H%M%S")
-            self.recorder.start_recording(filename)
-            logger.info(f"Recording started: {filename}")
+            self.recorder.start_recording(filename, trigger=trigger)
+            logger.info(f"Recording started: {filename} (trigger={trigger})")
         else:
             self.recorder.extend_recording()
 
@@ -1083,12 +1083,17 @@ class RaspberryPiController:
     def _on_recording_complete(self, result: RecordingResult) -> None:
         """Callback when video recording completes."""
         if result.success:
-            # Manual recordings always send back; motion recordings respect the toggle
+            # Manual recordings always send; motion recordings respect the bot-video toggle
             send = result.manual or (self.bot_handler and self.bot_handler.is_bot_video_enabled())
             if send:
-                caption = f"Manual recording — {result.duration:.0f}s" if result.manual else None
+                if result.manual:
+                    caption = f"Manual recording — {result.duration:.0f}s"
+                elif result.trigger == "radar":
+                    caption = f"ESP32 Radar motion — {result.duration:.0f}s"
+                else:
+                    caption = f"Motion detected — {result.duration:.0f}s"
                 self.telegram.send_video(result.file_path, caption=caption)
-                logger.info(f"Video sent: {result.file_path} ({result.duration:.1f}s)")
+                logger.info(f"Video sent: {result.file_path} ({result.duration:.1f}s, trigger={result.trigger})")
         else:
             if self.telegram:
                 label = "Manual recording" if result.manual else "Recording"

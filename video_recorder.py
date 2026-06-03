@@ -42,6 +42,7 @@ class RecordingResult:
     duration: float
     error_message: Optional[str] = None
     manual: bool = False
+    trigger: str = "motion"  # "radar", "local", "manual"
 
 
 class VideoRecorder:
@@ -73,6 +74,7 @@ class VideoRecorder:
         self._camera_lock = Lock()
         self._logger = logging.getLogger(__name__)
         self._manual_recording: bool = False
+        self._recording_trigger: str = "motion"
 
         # Callbacks
         self._on_recording_complete: Optional[Callable[[RecordingResult], None]] = None
@@ -131,7 +133,8 @@ class VideoRecorder:
         self,
         filename: Optional[str] = None,
         max_duration: Optional[int] = None,
-        manual: bool = False
+        manual: bool = False,
+        trigger: str = "motion"
     ) -> bool:
         """
         Start video recording.
@@ -140,6 +143,7 @@ class VideoRecorder:
             filename: Base filename (without extension). If None, uses timestamp.
             max_duration: Maximum recording duration in seconds. Uses config default if None.
             manual: If True, main loop motion-stop logic will not interrupt this recording.
+            trigger: What triggered the recording — "radar", "local", or "manual".
 
         Returns:
             True if recording started successfully.
@@ -173,6 +177,7 @@ class VideoRecorder:
 
         # Start recording in separate thread
         self._manual_recording = manual
+        self._recording_trigger = trigger
         self._stop_event.clear()
         self._recording_thread = threading.Thread(
             target=self._recording_worker,
@@ -245,7 +250,8 @@ class VideoRecorder:
                         success=True,
                         file_path=mp4_file,
                         duration=duration,
-                        manual=self._manual_recording
+                        manual=self._manual_recording,
+                        trigger=self._recording_trigger
                     )
                 else:
                     result = RecordingResult(
@@ -253,7 +259,8 @@ class VideoRecorder:
                         file_path=None,
                         duration=duration,
                         error_message="Conversion failed",
-                        manual=self._manual_recording
+                        manual=self._manual_recording,
+                        trigger=self._recording_trigger
                     )
             else:
                 self._logger.warning(f"Recording too short: {duration:.1f}s")
@@ -263,7 +270,8 @@ class VideoRecorder:
                     file_path=None,
                     duration=duration,
                     error_message=f"Too short ({duration:.1f}s < {self.config.min_duration}s)",
-                    manual=self._manual_recording
+                    manual=self._manual_recording,
+                    trigger=self._recording_trigger
                 )
 
             # Trigger callback
@@ -280,12 +288,14 @@ class VideoRecorder:
                     file_path=None,
                     duration=time.time() - start_time,
                     error_message=str(e),
-                    manual=self._manual_recording
+                    manual=self._manual_recording,
+                    trigger=self._recording_trigger
                 ))
 
         finally:
             self._state = RecordingState.IDLE
             self._manual_recording = False
+            self._recording_trigger = "motion"
 
     def _convert_to_mp4(self, h264_file: str, mp4_file: str) -> bool:
         """Convert H264 to MP4 using ffmpeg"""

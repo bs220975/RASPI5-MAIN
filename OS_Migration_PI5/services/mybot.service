@@ -17,7 +17,7 @@ Environment="PYTHONUNBUFFERED=1"
 Environment="PATH=/home/pi5/myenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 Environment="DISPLAY=:0"
 Environment="XAUTHORITY=/home/pi5/.Xauthority"
-Environment="MQTT_HOST=192.168.1.108"
+Environment="MQTT_HOST=localhost"
 
 # Logging: Python logging writes to stdout; telepot network timeout noise goes to stderr.
 # Capture structured Python logs to the output file; suppress the raw telepot stderr flood.
@@ -25,8 +25,7 @@ StandardOutput=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Output_m
 StandardError=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/Error_mybot_service.log
 
 # Restart policy — restart on crash/OOM/signal only, NOT on explicit systemctl stop.
-# Keepalived uses systemctl stop (notify_backup/fault) to control mybot — Restart=always
-# would fight keepalived and rapidly cycle through StartLimitBurst, triggering a reboot.
+# Restart=always would cycle rapidly through StartLimitBurst after 5 failures, triggering a reboot.
 Restart=on-failure
 RestartSec=10
 
