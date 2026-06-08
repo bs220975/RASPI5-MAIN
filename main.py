@@ -130,6 +130,9 @@ class RaspberryPiController:
 
         # Delayed recording-stop timer for MQTT radar motion (no direct sensor on Pi5)
         self._radar_rec_stop_timer: Optional[threading.Timer] = None
+        # Confirmation window timer: motion=ON arms this; fires _do_radar_motion_on().
+        # motion=OFF arriving before it fires cancels it (EMI-burst suppression).
+        self._radar_motion_confirm_timer: Optional[threading.Timer] = None
 
         # LP porch relay state (ESP32-LP-RLY / L-Porch-Light app switch)
         self._lp_rly_light_on: bool = False
@@ -719,23 +722,23 @@ class RaspberryPiController:
         """
         Handle a radar motion event from ESP32-RADAR via MQTT.
 
-        motion=ON  → porch light (night only) + video recording + Telegram alert
-        motion=OFF → porch light off countdown + stop recording after motion timeout
+        motion=ON  → arms a confirmation window (radar_confirm_window_s); all
+                     actions (lights, Telegram, recording) fire only when the
+                     timer expires.  If motion=OFF arrives before then, the
+                     whole event is suppressed as a likely EMI burst.
+        motion=OFF → cancels any pending confirm timer (suppresses false
+                     triggers) or starts the 5-min light-off countdown.
         """
         motion_on = payload.upper() == 'ON'
         current_time = time.time()
-        current_hour = datetime.now().hour
-        is_night = (current_hour >= 18) or (current_hour < 6)
 
         if motion_on:
             self._last_motion_time = current_time
 
-            # Cancel any pending recording-stop timer (re-entry while still moving)
+            # Cancel any pending stop / off timers (re-entry while still moving)
             if self._radar_rec_stop_timer is not None:
                 self._radar_rec_stop_timer.cancel()
                 self._radar_rec_stop_timer = None
-
-            # ── Upper-lobby + lower-lobby lights (night only, respect manual overrides) ──
             if self._ul_light_off_timer is not None:
                 self._ul_light_off_timer.cancel()
                 self._ul_light_off_timer = None
@@ -743,35 +746,34 @@ class RaspberryPiController:
                 self._ll_light_off_timer.cancel()
                 self._ll_light_off_timer = None
 
-            if is_night and self.mqtt_bridge:
-                if current_time - self._ul_manual_off_time < 120:
-                    logger.debug('Radar motion: upper-lobby manual override active — skipping auto-ON')
-                else:
-                    logger.info('Radar motion ON (night) → upper-lobby relay ON')
-                    self.mqtt_bridge.send_ul_relay(True)
+            # Reset the confirm window on every motion=ON (handles rapid re-entry)
+            if self._radar_motion_confirm_timer is not None:
+                self._radar_motion_confirm_timer.cancel()
 
-                if current_time - self._living_room_manual_off_time < 120:
-                    logger.debug('Radar motion: lower-lobby manual override active — skipping auto-ON')
-                else:
-                    logger.info('Radar motion ON (night) → lower-lobby relay ON')
-                    self.mqtt_bridge.send_ll_relay(True)
+            def _confirmed() -> None:
+                self._radar_motion_confirm_timer = None
+                self._do_radar_motion_on()
 
-            # ── Telegram motion notification (throttled) ─────────────────
-            cooldown = self.config.motion_message_cooldown
-            if current_time - self._last_motion_message_time > cooldown:
-                if self.telegram:
-                    self.telegram.send_text("Motion detected by ESP32 radar sensor")
-                self._last_motion_message_time = current_time
-
-            # ── Video recording ───────────────────────────────────────────
-            if self.bot_handler and self.bot_handler.is_video_recording_enabled():
-                self._handle_video_recording(current_time, trigger="radar")
-
-            # ── Firebase status ───────────────────────────────────────────
-            if self.firebase:
-                threading.Thread(target=self._push_firebase_status, daemon=True).start()
+            self._radar_motion_confirm_timer = threading.Timer(
+                self.config.radar_confirm_window_s, _confirmed
+            )
+            self._radar_motion_confirm_timer.daemon = True
+            self._radar_motion_confirm_timer.start()
+            logger.debug(
+                f'Radar motion: ON pending — confirm in {self.config.radar_confirm_window_s}s'
+            )
 
         else:
+            # Cancel pending confirm — motion ended before window closed (EMI burst)
+            if self._radar_motion_confirm_timer is not None:
+                self._radar_motion_confirm_timer.cancel()
+                self._radar_motion_confirm_timer = None
+                logger.info(
+                    f'Radar motion: OFF within {self.config.radar_confirm_window_s}s '
+                    '— suppressed as likely EMI burst'
+                )
+                return
+
             # ── Upper-lobby light off countdown ───────────────────────────
             if self._ul_light_on:
                 logger.info('Radar motion OFF → upper-lobby light off in 5 min')
@@ -814,6 +816,41 @@ class RaspberryPiController:
             # ── Firebase status ───────────────────────────────────────────
             if self.firebase:
                 threading.Thread(target=self._push_firebase_status, daemon=True).start()
+
+    def _do_radar_motion_on(self) -> None:
+        """Execute confirmed radar motion ON actions (lights, Telegram, recording)."""
+        current_time = time.time()
+        current_hour = datetime.now().hour
+        is_night = (current_hour >= 18) or (current_hour < 6)
+
+        # ── Upper-lobby + lower-lobby lights (night only, respect manual overrides) ──
+        if is_night and self.mqtt_bridge:
+            if current_time - self._ul_manual_off_time < 120:
+                logger.debug('Radar motion: upper-lobby manual override active — skipping auto-ON')
+            else:
+                logger.info('Radar motion ON (night) → upper-lobby relay ON')
+                self.mqtt_bridge.send_ul_relay(True)
+
+            if current_time - self._living_room_manual_off_time < 120:
+                logger.debug('Radar motion: lower-lobby manual override active — skipping auto-ON')
+            else:
+                logger.info('Radar motion ON (night) → lower-lobby relay ON')
+                self.mqtt_bridge.send_ll_relay(True)
+
+        # ── Telegram motion notification (throttled) ─────────────────────
+        cooldown = self.config.motion_message_cooldown
+        if current_time - self._last_motion_message_time > cooldown:
+            if self.telegram:
+                self.telegram.send_text("Motion detected by ESP32 radar sensor")
+            self._last_motion_message_time = current_time
+
+        # ── Video recording ───────────────────────────────────────────────
+        if self.bot_handler and self.bot_handler.is_video_recording_enabled():
+            self._handle_video_recording(current_time, trigger="radar")
+
+        # ── Firebase status ───────────────────────────────────────────────
+        if self.firebase:
+            threading.Thread(target=self._push_firebase_status, daemon=True).start()
 
     def _on_firebase_ul_cmd(self, cmd: bool) -> None:
         """
@@ -1219,6 +1256,9 @@ class RaspberryPiController:
 
         if self._radar_rec_stop_timer is not None:
             self._radar_rec_stop_timer.cancel()
+
+        if self._radar_motion_confirm_timer is not None:
+            self._radar_motion_confirm_timer.cancel()
 
         if self.scheduler:
             logger.info("Stopping light scheduler...")

@@ -375,6 +375,9 @@ class AppConfig:
     light_cooldown: int = 30  # seconds between light activations
     motion_message_cooldown: int = 120  # seconds between motion notifications
     relay_heartbeat_interval: int = 120  # seconds between ESP01 relay polls
+    # ESP32-RADAR motion confirmation window: motion=OFF arriving within this many
+    # seconds of motion=ON is treated as an EMI burst and the event is suppressed.
+    radar_confirm_window_s: float = 2.0
 
     # Local API server (LAN fallback when Firebase is down)
     local_api_port: int = 5757
