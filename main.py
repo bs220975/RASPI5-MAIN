@@ -119,6 +119,7 @@ class RaspberryPiController:
 
         # Upper-lobby relay state (managed by MQTT radar motion + Firebase lobby stream)
         self._ul_light_on: bool = False
+        self._ul_motion_triggered: bool = False  # True only when last ON was from radar motion
         self._ul_light_off_timer: Optional[threading.Timer] = None
         self._last_ul_cmd: Optional[bool] = None
         self._ul_cmd_timer: Optional[threading.Timer] = None
@@ -126,6 +127,7 @@ class RaspberryPiController:
         self._ul_manual_off_time: float = 0
 
         # Lower-lobby off timer — radar motion triggers LL-RLY same as UL-RLY
+        self._ll_motion_triggered: bool = False  # True only when last ON was from radar motion
         self._ll_light_off_timer: Optional[threading.Timer] = None
 
         # Delayed recording-stop timer for MQTT radar motion (no direct sensor on Pi5)
@@ -309,9 +311,9 @@ class RaspberryPiController:
             # Initialize light scheduler (Firebase-backed cron timers)
             logger.info("Initializing light scheduler...")
             self.scheduler = LightScheduler(
-                send_ll=lambda s: self.mqtt_bridge and self.mqtt_bridge.send_ll_relay(s),
-                send_ul=lambda s: self.mqtt_bridge and self.mqtt_bridge.send_ul_relay(s),
-                send_lp_rly=lambda s: self.mqtt_bridge and self.mqtt_bridge.send_lp_rly_relay(s),
+                send_ll=self._on_schedule_ll_relay,
+                send_ul=self._on_schedule_ul_relay,
+                send_lp_rly=self._on_schedule_lp_rly_relay,
             )
             self.scheduler.start()
             if self.firebase:
@@ -591,6 +593,16 @@ class RaspberryPiController:
         self._light_cmd_timer.daemon = True
         self._light_cmd_timer.start()
 
+    def _on_schedule_ll_relay(self, cmd: bool) -> None:
+        """Scheduler ON/OFF for lower-lobby relay."""
+        if cmd:
+            self._ll_motion_triggered = False
+        else:
+            # Clear BEFORE sending so MQTT state confirmation doesn't trigger the firmware-auto-off counter
+            self._last_living_room_cmd = False
+        if self.mqtt_bridge:
+            self.mqtt_bridge.send_ll_relay(cmd)
+
     def _execute_light_cmd(self, cmd: bool) -> None:
         """Execute the debounced light command — skip if already in this state."""
         if cmd == self._last_living_room_cmd:
@@ -601,8 +613,9 @@ class RaspberryPiController:
             self._living_room_manual_off_time = time.time()
             logger.debug('Living room manual OFF recorded — motion auto-ON suppressed for 2 min')
         elif cmd:
-            # User explicitly turned it ON — clear the manual override immediately
+            # User explicitly turned it ON — clear the manual override and motion flag
             self._living_room_manual_off_time = 0
+            self._ll_motion_triggered = False
             logger.debug('Living room manual ON — motion auto-ON override cleared')
         self._last_living_room_cmd = cmd
         logger.info(f'Executing light command: {"ON" if cmd else "OFF"}')
@@ -664,6 +677,16 @@ class RaspberryPiController:
         except (ValueError, AttributeError):
             relay_on = payload.upper() == 'ON'
 
+        # If firmware auto-off fired while light was manually on, re-send ON and ignore
+        if not relay_on and not self._ll_motion_triggered and self._last_living_room_cmd:
+            logger.info('LL firmware auto-off on manually-on light — re-sending ON')
+            if self._light_cmd_timer is not None:
+                self._light_cmd_timer.cancel()
+                self._light_cmd_timer = None
+            if self.mqtt_bridge:
+                self.mqtt_bridge.send_ll_relay(True)
+            return
+
         # Set dedup flag before Firebase write so the SSE command stream skips
         # re-execution when it sees the updated state value.
         self._last_living_room_cmd = relay_on
@@ -685,10 +708,20 @@ class RaspberryPiController:
         Android app reflects the actual physical relay state.
         """
         relay_on = payload.upper() == 'ON'
-        self._ul_light_on = relay_on
-        self._ul_reachable = True
         logger.info(f'Upper-lobby relay state via MQTT: {"ON" if relay_on else "OFF"}')
 
+        # If firmware auto-off fired while light was manually on, re-send ON and ignore
+        if not relay_on and not self._ul_motion_triggered and self._last_ul_cmd:
+            logger.info('UL firmware auto-off on manually-on light — re-sending ON')
+            if self._ul_cmd_timer is not None:
+                self._ul_cmd_timer.cancel()
+                self._ul_cmd_timer = None
+            if self.mqtt_bridge:
+                self.mqtt_bridge.send_ul_relay(True)
+            return
+
+        self._ul_light_on = relay_on
+        self._ul_reachable = True
         self._last_ul_cmd = relay_on
 
         def _update() -> None:
@@ -714,7 +747,7 @@ class RaspberryPiController:
             if self.firebase:
                 self.firebase.push_ul_relay_status(
                     reachable=available,
-                    relay_on=self._ul_light_on if available else False,
+                    relay_on=self._ul_light_on,  # preserve last known state — don't write False on brief offline
                 )
         threading.Thread(target=_update, daemon=True).start()
 
@@ -774,29 +807,39 @@ class RaspberryPiController:
                 )
                 return
 
-            # ── Upper-lobby light off countdown ───────────────────────────
-            if self._ul_light_on:
+            # ── Upper-lobby light off countdown (only if motion-triggered) ─
+            if self._ul_motion_triggered:
                 logger.info('Radar motion OFF → upper-lobby light off in 5 min')
 
                 def _turn_off() -> None:
+                    if not self._ul_motion_triggered:
+                        logger.debug('UL off timer skipped — light re-triggered manually/schedule')
+                        self._ul_light_off_timer = None
+                        return
                     if self.mqtt_bridge:
                         logger.info('Upper-lobby light off timer fired')
                         self.mqtt_bridge.send_ul_relay(False)
                     self._ul_light_off_timer = None
+                    self._ul_motion_triggered = False
 
                 self._ul_light_off_timer = threading.Timer(300.0, _turn_off)
                 self._ul_light_off_timer.daemon = True
                 self._ul_light_off_timer.start()
 
-            # ── Lower-lobby light off countdown ──────────────────────────
-            if self._last_living_room_cmd:
+            # ── Lower-lobby light off countdown (only if motion-triggered) ─
+            if self._ll_motion_triggered:
                 logger.info('Radar motion OFF → lower-lobby light off in 5 min')
 
                 def _turn_off_ll() -> None:
+                    if not self._ll_motion_triggered:
+                        logger.debug('LL off timer skipped — light re-triggered manually/schedule')
+                        self._ll_light_off_timer = None
+                        return
                     if self.mqtt_bridge:
                         logger.info('Lower-lobby light off timer fired')
                         self.mqtt_bridge.send_ll_relay(False)
                     self._ll_light_off_timer = None
+                    self._ll_motion_triggered = False
 
                 self._ll_light_off_timer = threading.Timer(300.0, _turn_off_ll)
                 self._ll_light_off_timer.daemon = True
@@ -830,12 +873,14 @@ class RaspberryPiController:
             else:
                 logger.info('Radar motion ON (night) → upper-lobby relay ON')
                 self.mqtt_bridge.send_ul_relay(True)
+                self._ul_motion_triggered = True
 
             if current_time - self._living_room_manual_off_time < 120:
                 logger.debug('Radar motion: lower-lobby manual override active — skipping auto-ON')
             else:
                 logger.info('Radar motion ON (night) → lower-lobby relay ON')
                 self.mqtt_bridge.send_ll_relay(True)
+                self._ll_motion_triggered = True
 
         # ── Telegram motion notification (throttled) ─────────────────────
         cooldown = self.config.motion_message_cooldown
@@ -893,6 +938,16 @@ class RaspberryPiController:
         except Exception as e:
             logger.warning(f'Porch command execute error: {e}')
 
+    def _on_schedule_ul_relay(self, cmd: bool) -> None:
+        """Scheduler ON/OFF for upper-lobby relay."""
+        if cmd:
+            self._ul_motion_triggered = False
+        else:
+            # Clear BEFORE sending so MQTT state confirmation doesn't trigger the firmware-auto-off counter
+            self._last_ul_cmd = False
+        if self.mqtt_bridge:
+            self.mqtt_bridge.send_ul_relay(cmd)
+
     # ------------------------------------------------------------------
     # ESP32-LP-RLY (L-Porch-Light) callbacks
     # ------------------------------------------------------------------
@@ -905,10 +960,20 @@ class RaspberryPiController:
         so the app switch reflects the actual physical relay state.
         """
         relay_on = payload.upper() == 'ON'
-        self._lp_rly_light_on = relay_on
-        self._lp_rly_reachable = True
         logger.info(f'LP-RLY state via MQTT: {"ON" if relay_on else "OFF"}')
 
+        # If firmware auto-off fired while light was manually on, re-send ON and ignore
+        if not relay_on and self._last_lp_rly_cmd:
+            logger.info('LP-RLY firmware auto-off on manually-on light — re-sending ON')
+            if self._lp_rly_cmd_timer is not None:
+                self._lp_rly_cmd_timer.cancel()
+                self._lp_rly_cmd_timer = None
+            if self.mqtt_bridge:
+                self.mqtt_bridge.send_lp_rly_relay(True)
+            return
+
+        self._lp_rly_light_on = relay_on
+        self._lp_rly_reachable = True
         self._last_lp_rly_cmd = relay_on
 
         def _update() -> None:
@@ -932,7 +997,7 @@ class RaspberryPiController:
             if self.firebase:
                 self.firebase.push_lp_rly_status(
                     reachable=available,
-                    relay_on=self._lp_rly_light_on if available else False,
+                    relay_on=self._lp_rly_light_on,  # preserve last known state — don't write False on brief offline
                 )
         threading.Thread(target=_update, daemon=True).start()
 
@@ -968,6 +1033,14 @@ class RaspberryPiController:
                 # Confirmation arrives via MQTT state → _on_lp_rly_mqtt_state
         except Exception as e:
             logger.warning(f'LP-RLY command execute error: {e}')
+
+    def _on_schedule_lp_rly_relay(self, cmd: bool) -> None:
+        """Scheduler ON/OFF for LP-RLY relay."""
+        if not cmd:
+            # Clear BEFORE sending so MQTT state confirmation doesn't trigger the firmware-auto-off counter
+            self._last_lp_rly_cmd = False
+        if self.mqtt_bridge:
+            self.mqtt_bridge.send_lp_rly_relay(cmd)
 
     def _on_lp_rly_ota_status(self, payload: str) -> None:
         """Forward ESP32-LP-RLY OTA progress JSON to Telegram."""
