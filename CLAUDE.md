@@ -14,7 +14,7 @@ It gives Claude full context about this machine and project without the user nee
 | User | `pi5` |
 | IP | `192.168.1.108` |
 | OS | Debian (aarch64), kernel 6.12.x |
-| Python venv | `/home/pi5/myenv/` (Python 3.13, --system-site-packages) |
+| Python venv | `/home/pi5/myenv/` (Python 3.13, `include-system-site-packages = true`) |
 
 ---
 
@@ -116,7 +116,23 @@ Firebase key: `RASPI-5` (Pi4 used `RASPI-4` — note: heartbeat still PATCHes `/
 |-------|--------|-------|
 | Reed switch false door alerts | Software fix applied | Debounce 2.0s, cooldown 5s in `sensors.py`; hardware RC filter (10kΩ + 100nF on GPIO 26) recommended but not yet soldered |
 | LD2420 EMI on GPIO 26 | Root cause identified | Radar ~10cm from Pi couples RF into reed switch wire; move radar ≥30cm or add RC filter |
-| `mybot.service` / `mqttdatainflux.service` | Currently inactive | Services may need to be started/debugged |
+| `mybot.service` / `mqttdatainflux.service` | Active | Running normally |
+
+---
+
+## Python Venv Notes
+
+**Path:** `/home/pi5/myenv/`
+**Config:** `/home/pi5/myenv/pyvenv.cfg`
+
+`picamera2` is installed **system-wide** (via apt), not inside the venv. The venv must have `include-system-site-packages = true` in `pyvenv.cfg` to access it — without this, `/record_video` silently fails with `PiCamera2 not available`.
+
+**If the venv is ever recreated, always use:**
+```bash
+python3 -m venv --system-site-packages /home/pi5/myenv
+```
+
+This was the root cause of bot video recording not working (fixed Jun 2026).
 
 ---
 
