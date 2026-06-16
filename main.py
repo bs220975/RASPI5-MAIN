@@ -197,9 +197,10 @@ class RaspberryPiController:
             logger.info("Initializing Telegram handler...")
             self.telegram = TelegramHandler(self.config.telegram)
             if not self.telegram.start():
-                logger.error("Failed to initialize Telegram handler")
-                return False
-            logger.info("Telegram handler: OK")
+                logger.warning("Telegram unavailable at startup — continuing without it; will retry on next restart")
+                self.telegram = None
+            else:
+                logger.info("Telegram handler: OK")
 
             # Initialize ESP device manager
             logger.info("Initializing ESP device manager...")
@@ -325,12 +326,13 @@ class RaspberryPiController:
             logger.info("Light scheduler: OK")
 
             # Start bot message loop
-            self.telegram.start_message_loop(self.bot_handler.handle_message)
-            logger.info("Bot message loop: Started")
-
-            # Register commands with Telegram menu (shows on '/' press)
-            self.telegram.set_my_commands(self.bot_handler.get_commands_list())
-            logger.info("Bot commands menu: Registered")
+            if self.telegram:
+                self.telegram.start_message_loop(self.bot_handler.handle_message)
+                logger.info("Bot message loop: Started")
+                self.telegram.set_my_commands(self.bot_handler.get_commands_list())
+                logger.info("Bot commands menu: Registered")
+            else:
+                logger.warning("Bot message loop: skipped (Telegram unavailable)")
 
             logger.info("=" * 50)
             logger.info("Initialization complete")
