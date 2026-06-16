@@ -5,11 +5,12 @@ from datetime import datetime
 import json
 import pytz
 import ssl
+import sys
 import time
 import random
 
 # MQTT Configuration for Local Broker (Raspberry Pi)
-MQTT_ADDRESS = '192.168.1.122'
+MQTT_ADDRESS = 'localhost'
 MQTT_USER = 'mq'
 MQTT_PASSWORD = 'mq'
 MQTT_TOPICS = ['DHT11', 'ENERGY', 'ESPLOG', 'UNITS', 'MOTION']
@@ -262,6 +263,7 @@ if __name__ == '__main__':
         
     except Exception as e:
         print(f'[{get_indian_timestamp()}] Error: {e}')
+        sys.exit(1)  # non-zero so Restart=on-failure triggers
     finally:
         # Close InfluxDB client properly
         influx_client.close()
