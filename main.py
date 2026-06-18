@@ -603,6 +603,17 @@ class RaspberryPiController:
         Dedup runs at handler-entry so reconnect replays of the current state
         are silently skipped without resetting the debounce window.
         """
+        # Only the MASTER Pi (holding VIP 192.168.1.100) handles app commands.
+        # Pi5 as BACKUP still controls LL-RLY via RADAR1 motion (_do_radar_motion_on)
+        # but app-level commands go exclusively to Pi4 to avoid relay fights.
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            if '192.168.1.100' not in vip.stdout:
+                return
+        except Exception:
+            pass
+
         if cmd == self._last_living_room_cmd:
             logger.debug(f'Firebase stream: living room {"ON" if cmd else "OFF"} — ignored (matches current state)')
             return
@@ -734,14 +745,22 @@ class RaspberryPiController:
         # re-execution when it sees the updated state value.
         self._last_living_room_cmd = relay_on
 
-        def _update() -> None:
-            if self.firebase:
-                self.firebase.push_ll_relay_status(
-                    reachable=True, relay_on=relay_on
-                )
-                self.firebase.set_light_confirmed('living_room', relay_on)
-                self.firebase.set_light_state('living_room', relay_on)
-        threading.Thread(target=_update, daemon=True).start()
+        # Only the MASTER Pi syncs LL-RLY state back to Firebase; the BACKUP Pi
+        # still tracks _last_living_room_cmd locally for its own firmware guard.
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            if '192.168.1.100' in vip.stdout:
+                def _update() -> None:
+                    if self.firebase:
+                        self.firebase.push_ll_relay_status(
+                            reachable=True, relay_on=relay_on
+                        )
+                        self.firebase.set_light_confirmed('living_room', relay_on)
+                        self.firebase.set_light_state('living_room', relay_on)
+                threading.Thread(target=_update, daemon=True).start()
+        except Exception:
+            pass
 
     def _on_ul_mqtt_state(self, payload: str) -> None:
         """

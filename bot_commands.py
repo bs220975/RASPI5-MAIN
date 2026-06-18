@@ -139,6 +139,17 @@ class BotCommandHandler:
             msg: Telegram message dictionary
         """
         try:
+            # Only process commands when this Pi holds the floating VIP (192.168.1.100).
+            # When Pi4 is MASTER it holds the VIP and handles all Telegram commands.
+            # Dropping here prevents duplicate responses without stopping Pi5's
+            # hardware duties (video recording, lobby lights, RADAR1 handling).
+            vip_result = subprocess.run(
+                ['ip', 'addr', 'show', 'wlan0'],
+                capture_output=True, text=True, timeout=2
+            )
+            if '192.168.1.100' not in vip_result.stdout:
+                return  # BACKUP: Pi4 is MASTER, let it handle commands
+
             chat_id = msg['chat']['id']
             command_text = msg.get('text', '')
 
