@@ -129,6 +129,9 @@ class RaspberryPiController:
         # Lower-lobby off timer — radar motion triggers LL-RLY same as UL-RLY
         self._ll_motion_triggered: bool = False  # True only when last ON was from radar motion
         self._ll_light_off_timer: Optional[threading.Timer] = None
+        # Set True when LL-RLY goes offline; suppresses firmware guard on first reconnect
+        # state message so ESP01 self-ON-on-reconnect doesn't lock _last_living_room_cmd=True.
+        self._ll_was_offline: bool = False
 
         # Delayed recording-stop timer for MQTT radar motion (no direct sensor on Pi5)
         self._radar_rec_stop_timer: Optional[threading.Timer] = None
@@ -295,6 +298,7 @@ class RaspberryPiController:
             self.mqtt_bridge = MqttBridge(
                 self.config.mqtt,
                 on_ll_state=self._on_ll_mqtt_state,
+                on_ll_availability=self._on_ll_availability_changed,
                 on_ul_state=self._on_ul_mqtt_state,
                 on_ul_availability=self._on_ul_availability_changed,
                 on_lp_rly_state=self._on_lp_rly_mqtt_state,
@@ -689,6 +693,12 @@ class RaspberryPiController:
         if self.aws_door:
             self.aws_door.publish_door_event("closed")
 
+    def _on_ll_availability_changed(self, available: bool) -> None:
+        """Track ESP01-LL-RLY offline/online transitions."""
+        logger.info(f'Lower-lobby relay availability: {"online" if available else "offline"}')
+        if not available:
+            self._ll_was_offline = True
+
     def _on_ll_mqtt_state(self, payload: str) -> None:
         """
         Handle an ESP01-LL-RLY (lower-lobby) state message arriving over MQTT.
@@ -704,8 +714,14 @@ class RaspberryPiController:
         except (ValueError, AttributeError):
             relay_on = payload.upper() == 'ON'
 
-        # If firmware auto-off fired while light was manually on, re-send ON and ignore
-        if not relay_on and not self._ll_motion_triggered and self._last_living_room_cmd:
+        # Skip firmware guard on the first state message after a reconnect — the ESP01
+        # firmware turns the relay ON by itself on MQTT reconnect, which would otherwise
+        # set _last_living_room_cmd=True and lock the light perpetually ON.
+        if self._ll_was_offline:
+            self._ll_was_offline = False
+            logger.debug('LL first state after reconnect — firmware guard suppressed')
+        elif not relay_on and not self._ll_motion_triggered and self._last_living_room_cmd:
+            # Firmware auto-off fired while light was manually on — re-send ON.
             logger.info('LL firmware auto-off on manually-on light — re-sending ON')
             if self._light_cmd_timer is not None:
                 self._light_cmd_timer.cancel()
