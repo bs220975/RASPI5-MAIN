@@ -575,6 +575,17 @@ class RaspberryPiController:
 
     def _poll_relay_heartbeat(self) -> None:
         """Poll ESP01 relay at 192.168.1.85 and push status to Firebase."""
+        # Only the MASTER Pi polls and pushes relay status to Firebase.
+        # Both Pis polling the same device every 2 min (staggered) caused
+        # alternating OFFLINE pushes every ~1 min — the spinning in the app.
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            if '192.168.1.100' not in vip.stdout:
+                return
+        except Exception:
+            pass
+
         try:
             state = self.esp.get_relay_state()
             reachable = state is not None
