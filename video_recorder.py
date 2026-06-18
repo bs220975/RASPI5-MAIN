@@ -302,11 +302,11 @@ class VideoRecorder:
         try:
             result = subprocess.run(
                 ["ffmpeg", "-y", "-i", h264_file,
-                 "-c:v", "libx264", "-crf", "26", "-preset", "fast",
-                 "-c:a", "copy", mp4_file],
+                 "-c:v", "copy", "-c:a", "copy",
+                 "-movflags", "+faststart", mp4_file],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                timeout=60
+                timeout=30
             )
             if result.returncode == 0:
                 self._logger.info(f"Converted to MP4: {mp4_file}")

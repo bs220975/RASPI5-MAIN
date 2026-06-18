@@ -110,9 +110,12 @@ class TelegramHandler:
         self._bot: Optional[telepot.Bot] = None
         self._chat_id = config.chat_id
         self._message_queue: PriorityQueue[QueuedMessage] = PriorityQueue()
+        self._text_queue: PriorityQueue[QueuedMessage] = PriorityQueue()
         self._worker_thread: Optional[threading.Thread] = None
+        self._text_worker_thread: Optional[threading.Thread] = None
         self._running = False
         self._send_lock = threading.Lock()
+        self._text_lock = threading.Lock()
         self._initialized = False
 
     def start(self) -> bool:
@@ -139,10 +142,16 @@ class TelegramHandler:
         self._running = True
         self._worker_thread = threading.Thread(
             target=self._worker_loop,
-            name="TelegramWorker",
+            name="TelegramMediaWorker",
             daemon=True
         )
         self._worker_thread.start()
+        self._text_worker_thread = threading.Thread(
+            target=self._text_worker_loop,
+            name="TelegramTextWorker",
+            daemon=True
+        )
+        self._text_worker_thread.start()
         logger.info("Telegram handler started")
         return True
 
@@ -158,23 +167,26 @@ class TelegramHandler:
 
         self._running = False
 
-        # Wait for remaining messages to be sent
+        try:
+            self._text_queue.join()
+        except Exception:
+            pass
         try:
             self._message_queue.join()
         except Exception:
             pass
 
-
+        if self._text_worker_thread and self._text_worker_thread.is_alive():
+            self._text_worker_thread.join(timeout=timeout)
         if self._worker_thread and self._worker_thread.is_alive():
             self._worker_thread.join(timeout=timeout)
 
         logger.info("Telegram handler stopped")
 
     def _worker_loop(self) -> None:
-        """Worker thread that processes the message queue."""
+        """Worker thread for media messages (video, image, document)."""
         while self._running:
             try:
-                # Non-blocking get with timeout
                 try:
                     message = self._message_queue.get(timeout=0.5)
                 except Empty:
@@ -183,22 +195,52 @@ class TelegramHandler:
                 success = self._send_message(message)
 
                 if not success and message.retry_count < self._config.retry_attempts:
-                    # Requeue for retry with exponential backoff
                     message.retry_count += 1
-                    delay = self._config.retry_delay * (2 ** (message.retry_count - 1))
-                    logger.info(f"Retrying in {delay}s (attempt {message.retry_count})")
+                    # Use a longer base delay for media retries (server 504s need time to clear)
+                    base = max(self._config.retry_delay, 30)
+                    delay = base * message.retry_count
+                    logger.info(f"Retrying media in {delay}s (attempt {message.retry_count}/{self._config.retry_attempts})")
                     time.sleep(delay)
                     self._message_queue.put(message)
                 elif not success:
-                    logger.error(f"Failed to send message after {message.retry_count} attempts")
+                    logger.error(f"Failed to send {message.message_type.name} after {message.retry_count} attempts — dropped")
 
                 self._message_queue.task_done()
-
-                # Rate limiting
                 time.sleep(self._config.rate_limit_delay)
 
             except Exception as e:
-                logger.error(f"Worker loop error: {e}")
+                logger.error(f"Media worker loop error: {e}")
+
+    def _text_worker_loop(self) -> None:
+        """Dedicated worker thread for text messages — never blocked by media uploads."""
+        while self._running:
+            try:
+                try:
+                    message = self._text_queue.get(timeout=0.5)
+                except Empty:
+                    continue
+
+                try:
+                    with self._text_lock:
+                        kwargs = {}
+                        if message.parse_mode:
+                            kwargs['parse_mode'] = message.parse_mode
+                        self._bot.sendMessage(self._chat_id, str(message.content), **kwargs)
+                    logger.debug("Sent TEXT message (fast path)")
+                except Exception as e:
+                    if message.retry_count < self._config.retry_attempts:
+                        message.retry_count += 1
+                        delay = self._config.retry_delay * (2 ** (message.retry_count - 1))
+                        time.sleep(delay)
+                        self._text_queue.put(message)
+                    else:
+                        logger.error(f"Text send failed after retries: {e}")
+
+                self._text_queue.task_done()
+                time.sleep(0.3)
+
+            except Exception as e:
+                logger.error(f"Text worker loop error: {e}")
 
     def _send_message(self, message: QueuedMessage) -> bool:
         """
@@ -246,7 +288,10 @@ class TelegramHandler:
                         message.caption
                     )
 
-            logger.debug(f"Sent {message.message_type.name} message")
+            if message.message_type != MessageType.TEXT:
+                logger.info(f"Sent {message.message_type.name} to Telegram OK")
+            else:
+                logger.debug(f"Sent {message.message_type.name} message")
             return True
 
         except TelegramError as e:
@@ -302,7 +347,7 @@ class TelegramHandler:
         if not text:
             return
         message = QueuedMessage(MessageType.TEXT, text, parse_mode=parse_mode)
-        self._message_queue.put(message)
+        self._text_queue.put(message)
 
     def send_video(
         self,
@@ -481,13 +526,25 @@ class TelegramHandler:
             raise RuntimeError("Bot not initialized. Call start() first.")
 
         def run_loop():
-            try:
-                self._bot.message_loop(handler_callback)
-                # Keep thread alive
-                while self._running:
-                    time.sleep(1)
-            except Exception as e:
-                logger.error(f"Message loop error: {e}")
+            offset = None
+            while self._running:
+                try:
+                    updates = self._bot.getUpdates(
+                        offset=offset,
+                        timeout=30,
+                        allowed_updates=['message'],
+                    )
+                    for update in updates:
+                        offset = update['update_id'] + 1
+                        if 'message' in update:
+                            try:
+                                handler_callback(update['message'])
+                            except Exception as e:
+                                logger.error(f"Handler error: {e}")
+                except Exception as e:
+                    logger.error(f"Message loop error: {e}")
+                    if self._running:
+                        time.sleep(5)
 
         thread = threading.Thread(
             target=run_loop,

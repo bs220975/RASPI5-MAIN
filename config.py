@@ -81,13 +81,13 @@ class TelegramConfig:
     bot_token: str = field(
         default_factory=lambda: _get_env(
             'TELEGRAM_BOT_TOKEN',
-            '6525932255:AAFtqifGYv2Q_r7PahyGT5Rd2wHzxeWeE2s'
+            '6525932255:AAH0ruMWAeH0I1KSCPug-y-57B4Q3OOsX1k'
         )
     )
     chat_id: str = field(
         default_factory=lambda: _get_env('TELEGRAM_CHAT_ID', '5820747117')
     )
-    retry_attempts: int = 3
+    retry_attempts: int = 5
     retry_delay: int = 5
     rate_limit_delay: float = 1.0
 

@@ -262,6 +262,21 @@ class RaspberryPiController:
             self.firebase = FirebaseLogger(self.config.firebase)
             if self.firebase.connect():
                 logger.info("Firebase logger: OK")
+                # Pre-seed dedup state from Firebase before starting SSE streams.
+                # Without this, the initial SSE 'put' event fires against
+                # _last_*_cmd=None and executes as a real command, turning lights
+                # on at every restart regardless of what the user last set.
+                self._last_living_room_cmd = self.firebase.get_light_command('living_room')
+                self._last_ul_cmd          = self.firebase.get_light_command('lobby')
+                self._last_lp_rly_cmd      = self.firebase.get_light_command('lower_porch_light')
+                # If Firebase shows the lower lobby light was ON at startup, treat it
+                # as motion-owned so the manually-ON guard does not block motion auto-ON.
+                if self._last_living_room_cmd:
+                    self._ll_motion_triggered = True
+                logger.info(
+                    f"Firebase startup state: living_room={self._last_living_room_cmd} "
+                    f"lobby={self._last_ul_cmd} lp_rly={self._last_lp_rly_cmd}"
+                )
                 self.firebase.start_command_stream(
                     'living_room', self._on_firebase_light_cmd
                 )
@@ -494,7 +509,8 @@ class RaspberryPiController:
             if motion_state_changed:
                 cooldown = self.config.motion_message_cooldown
                 if current_time - self._last_motion_message_time > cooldown:
-                    self.telegram.send_text("Motion detected by LD2420 radar sensor")
+                    if self.telegram:
+                        self.telegram.send_text("Motion detected by LD2420 radar sensor")
                     self._last_motion_message_time = current_time
 
             # Push motion start to Firebase
@@ -580,9 +596,13 @@ class RaspberryPiController:
 
         Debounces rapid bursts (e.g. Firebase replaying queued ON/OFF/ON on
         reconnect) — only the final command in a 400 ms window is executed.
-        Dedup runs at execute-time so reconnect replays of the current state
+        Dedup runs at handler-entry so reconnect replays of the current state
         are silently skipped without resetting the debounce window.
         """
+        if cmd == self._last_living_room_cmd:
+            logger.debug(f'Firebase stream: living room {"ON" if cmd else "OFF"} — ignored (matches current state)')
+            return
+
         logger.info(f'Firebase stream: living room {"ON" if cmd else "OFF"}')
 
         # Cancel any pending execution and arm a fresh timer
@@ -607,23 +627,28 @@ class RaspberryPiController:
 
     def _execute_light_cmd(self, cmd: bool) -> None:
         """Execute the debounced light command — skip if already in this state."""
+        # Cancel any motion-triggered auto-off timer — user is taking control.
+        if self._ll_light_off_timer is not None:
+            self._ll_light_off_timer.cancel()
+            self._ll_light_off_timer = None
+
+        if not cmd:
+            self._living_room_manual_off_time = time.time()
+            self._ll_motion_triggered = False
+            logger.info('Living room manual OFF — motion auto-ON suppressed for 2 min')
+        else:
+            self._living_room_manual_off_time = 0
+            self._ll_motion_triggered = False
+            logger.info('Living room manual ON — motion block cleared, manual state locked')
+
         if cmd == self._last_living_room_cmd:
             logger.debug(f'Light cmd {"ON" if cmd else "OFF"} skipped — same as last executed')
             return
-        if not cmd and self._last_living_room_cmd:
-            # User explicitly turned it off while ON — block motion re-activation
-            self._living_room_manual_off_time = time.time()
-            logger.debug('Living room manual OFF recorded — motion auto-ON suppressed for 2 min')
-        elif cmd:
-            # User explicitly turned it ON — clear the manual override and motion flag
-            self._living_room_manual_off_time = 0
-            self._ll_motion_triggered = False
-            logger.debug('Living room manual ON — motion auto-ON override cleared')
         self._last_living_room_cmd = cmd
         logger.info(f'Executing light command: {"ON" if cmd else "OFF"}')
 
         try:
-            if self.mqtt_bridge and self.mqtt_bridge.is_connected:
+            if self.mqtt_bridge and self.mqtt_bridge.is_connected and self.mqtt_bridge.ll_available:
                 if self.mqtt_bridge.send_ll_relay(cmd):
                     # Confirmation arrives via MQTT state topic → _on_ll_mqtt_state
                     return
@@ -820,6 +845,9 @@ class RaspberryPiController:
                         return
                     if self.mqtt_bridge:
                         logger.info('Upper-lobby light off timer fired')
+                        # Clear before sending so _on_ul_mqtt_state firmware-auto-off
+                        # guard doesn't see _last_ul_cmd=True and re-send ON.
+                        self._last_ul_cmd = False
                         self.mqtt_bridge.send_ul_relay(False)
                     self._ul_light_off_timer = None
                     self._ul_motion_triggered = False
@@ -839,6 +867,9 @@ class RaspberryPiController:
                         return
                     if self.mqtt_bridge:
                         logger.info('Lower-lobby light off timer fired')
+                        # Clear before sending so _on_ll_mqtt_state firmware-auto-off
+                        # guard doesn't see _last_living_room_cmd=True and re-send ON.
+                        self._last_living_room_cmd = False
                         self.mqtt_bridge.send_ll_relay(False)
                     self._ll_light_off_timer = None
                     self._ll_motion_triggered = False
@@ -905,6 +936,10 @@ class RaspberryPiController:
 
         Debounces rapid bursts, then sends the final command to ESP01-UL-RLY via MQTT.
         """
+        if cmd == self._last_ul_cmd:
+            logger.debug(f'Firebase stream: upper-lobby light {"ON" if cmd else "OFF"} — ignored (matches current state)')
+            return
+
         logger.info(f'Firebase stream: upper-lobby light {"ON" if cmd else "OFF"}')
 
         if self._ul_cmd_timer is not None:
@@ -926,9 +961,10 @@ class RaspberryPiController:
             self._ul_manual_off_time = time.time()
             logger.debug('Upper-lobby manual OFF recorded — radar auto-ON suppressed for 2 min')
         elif cmd:
-            # User explicitly turned it ON — clear the manual override immediately
+            # User explicitly turned it ON — clear override and disable motion auto-off
             self._ul_manual_off_time = 0
-            logger.debug('Upper-lobby manual ON — radar auto-ON override cleared')
+            self._ul_motion_triggered = False
+            logger.debug('Upper-lobby manual ON — motion auto-off disabled')
         self._last_ul_cmd = cmd
         logger.info(f'Executing upper-lobby command: {"ON" if cmd else "OFF"}')
 
@@ -1010,6 +1046,10 @@ class RaspberryPiController:
         Debounces rapid bursts (Firebase reconnect replays), then sends
         the final ON/OFF to ESP32-LP-RLY via MQTT.
         """
+        if cmd == self._last_lp_rly_cmd:
+            logger.debug(f'Firebase stream: L-Porch-Light {"ON" if cmd else "OFF"} — ignored (matches current state)')
+            return
+
         logger.info(f'Firebase stream: L-Porch-Light {"ON" if cmd else "OFF"}')
 
         if self._lp_rly_cmd_timer is not None:
@@ -1197,7 +1237,7 @@ class RaspberryPiController:
         if result.success:
             # Manual recordings always send; motion recordings respect the bot-video toggle
             send = result.manual or (self.bot_handler and self.bot_handler.is_bot_video_enabled())
-            if send:
+            if send and self.telegram:
                 if result.manual:
                     caption = f"Manual recording — {result.duration:.0f}s"
                 elif result.trigger == "radar":
