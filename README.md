@@ -15,6 +15,7 @@ reference, and troubleshooting. This file documents Pi5-specific details and cha
 
 - [Pi5-Specific Configuration](#pi5-specific-configuration)
 - [Running the Service](#running-the-service)
+- [LP-RDR Video Recording Service](#lp-rdr-video-recording-service)
 - [Dual-Pi Hub Architecture](#dual-pi-hub-architecture)
 - [Two-Floor Sensor & Relay Assignment](#two-floor-sensor--relay-assignment)
 - [Troubleshooting](#troubleshooting)
@@ -72,14 +73,61 @@ overridden via `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` environment variables.
 ```bash
 # Start / restart
 sudo systemctl restart mybot.service
+sudo systemctl restart mybot-lp-rdr.service
 
-# Live log
+# Live logs
+sudo tail -f logs/Output_mybot_service.log
+sudo tail -f logs/lp_rdr_service.log
+
+# Live journal
 journalctl -u mybot.service -f
+journalctl -u mybot-lp-rdr.service -f
 
 # Run manually (debug)
 cd /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN
 source /home/pi5/myenv/bin/activate
 python3 main.py
+```
+
+---
+
+## LP-RDR Video Recording Service
+
+A dedicated service (`mybot-lp-rdr.service`) handles all video recording and Telegram delivery for
+the ESP32-LP-RDR1 radar. It runs independently of `mybot.service` and owns the camera exclusively.
+
+| Item | Value |
+|---|---|
+| Script | `lp_rdr_service.py` |
+| Service | `/etc/systemd/system/mybot-lp-rdr.service` (repo: `OS_Migration_PI5/services/`) |
+| Motion topic | `home/pi5/lp-rdr/motion` (published by ESP32-LP-RDR1 directly to Pi5 real IP `.108`) |
+| Command topic | `home/pi5/lp-rdr/cmd` — `VIDEO_ON`, `VIDEO_OFF`, `RECORD_<sec>` |
+| Camera resolution | 1280×720 (720p) |
+| Bitrate | 500 kbps |
+| motion_timeout | 10 s after last motion before recording stops |
+| max_duration | 120 s |
+| Confirm window | 2 s (suppresses EMI bursts) |
+| Logs | `logs/lp_rdr_service.log`, `logs/lp_rdr_error.log` |
+
+**Why separate from mybot.service:** picamera2 is single-owner — only one process can hold the camera
+at a time. Separating into a dedicated service prevents conflicts and allows independent restart.
+
+**Why `home/pi5/lp-rdr/motion` and not the general radar1 topic:**
+ESP32-LP-RDR1 publishes this topic directly to Pi5's broker at `192.168.1.108`, bypassing the
+`.100` VIP entirely. Video recording works even if Pi4 is completely down and holds no VIP.
+
+```bash
+# Status
+sudo systemctl status mybot-lp-rdr.service
+
+# Restart
+sudo systemctl restart mybot-lp-rdr.service
+
+# Live log
+sudo tail -f logs/lp_rdr_service.log
+
+# Send manual record command (30s)
+mosquitto_pub -h localhost -u mq -P mq -t home/pi5/lp-rdr/cmd -m RECORD_30
 ```
 
 ---
@@ -205,51 +253,49 @@ LD2420 (serial /dev/serial0)
 
 ---
 
-### Pi5 — Upper Floor Lobby (RASPI5-MAIN)
+### Pi5 — Lower Porch (RASPI5-MAIN)
 
 | Item | Value |
 |---|---|
 | Pi | Raspberry Pi 5 |
 | IP | `192.168.1.108` |
 | GitHub repo | `RASPI5-MAIN` |
-| Floor | Upper lobby |
-| Radar sensor | **LD2420** wired to **ESP32-RADAR** (`192.168.1.87`) — NOT directly to Pi5 serial pins |
-| Relay device | **ESP01-UL-RLY** (`192.168.1.111`) — upper lobby light |
-| MQTT relay topic | `home/esp01/upper-lobby/cmd/relay` |
-| MQTT motion topic | `home/esp32/radar2/motion` (published by ESP32-RADAR) |
+| Radar sensor | **ESP32-LP-RDR1** (`192.168.1.87`) — radar + MQTT publisher |
+| Light relay | **ESP32-LP-RLY** (`192.168.1.89`) — lower porch light |
+| MQTT relay cmd topic | `home/switches/L-Porch-Light/cmd` |
+| MQTT motion topic (general) | `home/esp32/radar1/motion` → `.100` VIP broker |
+| MQTT motion topic (video) | `home/pi5/lp-rdr/motion` → `.108` Pi5 direct |
 
-**Why the radar is on the ESP32, not on Pi5:** The Pi5's `/dev/serial0` is the Bluetooth
-UART and cannot be used for the LD2420. The LD2420 is instead wired to the ESP32-RADAR
-board which publishes motion state over MQTT.
-
-**All ESP devices use the Keepalived VIP `192.168.1.100` as their MQTT broker.** Whichever
-Pi is MASTER holds the VIP and runs `mybot.service`. No firmware changes are needed when
-Pi4 ↔ Pi5 failover occurs — all devices reconnect automatically to the same VIP on the
-new MASTER.
-
-**Motion flow (Pi5):**
+**Motion flow (Pi5) — light control:**
 ```
-LD2420 (wired to ESP32-RADAR at 192.168.1.87)
-  └─► ESP32-RADAR publishes home/esp32/radar2/motion = ON
-        └─► Pi5 MqttBridge._on_message() → _on_radar_motion()
-              ├─► MQTT ON → ESP01-UL-RLY (192.168.1.111) → upper lobby light ON
-              └─► MQTT ON → ESP01-LL-RLY (192.168.1.85)  → lower lobby light ON
-                  (both lights respect 2-min manual-OFF override independently)
-                  (both lights turn OFF 5 min after motion stops)
+ESP32-LP-RDR1 radar detects motion
+  └─► publishes home/esp32/radar1/motion ON → .100 VIP broker
+        └─► Pi5 mqtt_bridge._on_radar_motion() (via bridge if Pi4 is MASTER)
+              └─► _do_radar_motion_on() — night only (18:00–06:00)
+                    └─► MQTT ON → home/switches/L-Porch-Light/cmd → ESP32-LP-RLY (.89)
+                          → porch light ON (5-min auto-off after motion stops)
+```
+
+**Motion flow (Pi5) — video recording:**
+```
+ESP32-LP-RDR1 radar detects motion
+  └─► publishes home/pi5/lp-rdr/motion ON → .108 Pi5 real IP (Pi4-independent)
+        └─► lp_rdr_service.py (mybot-lp-rdr.service)
+              └─► 2s confirm window → records 720p video → sends MP4 to Telegram
 ```
 
 ---
 
 ### Quick comparison
 
-| | Pi4 (lower lobby) | Pi5 (upper lobby) |
+| | Pi4 (lower lobby) | Pi5 (lower porch) |
 |---|---|---|
 | Repo | RASPI4-MAIN | RASPI5-MAIN |
-| Radar connection | Direct serial `/dev/serial0` | Via ESP32-RADAR over MQTT |
-| Light relay | ESP01-LL-RLY `192.168.1.85` | ESP01-UL-RLY `192.168.1.111` |
-| MQTT relay cmd topic | `home/esp01/lower-lobby/cmd/relay` | `home/esp01/upper-lobby/cmd/relay` |
+| Radar connection | Direct serial `/dev/serial0` | Via ESP32-LP-RDR1 over dual-topic MQTT |
+| Light relay | ESP01-LL-RLY `192.168.1.85` | ESP32-LP-RLY `192.168.1.89` |
+| MQTT relay cmd topic | `home/esp01/lower-lobby/cmd/relay` | `home/switches/L-Porch-Light/cmd` |
 | Night hours for auto-ON | 18:00 – 08:00 | 18:00 – 06:00 |
-| Code entry point | `_trigger_light_control()` | `_on_radar_motion()` |
+| Code entry point | `_trigger_light_control()` | `_do_radar_motion_on()` |
 
 ---
 
@@ -260,7 +306,8 @@ LD2420 (wired to ESP32-RADAR at 192.168.1.87)
 | Porch/living-room light keeps toggling on by itself after user turns it off | Radar or LD2420 motion is still active while user manually turns light OFF — motion was firing auto-ON again; fixed in 2026-05-18: `_porch_manual_off_time` / `_living_room_manual_off_time` timestamps block auto-ON for 2 minutes after a manual OFF via app |
 | Motion auto-ON takes 2–4 minutes to re-enable after manually toggling a light | Manual OFF sets the 2-min block timer but turning ON never cleared it; each OFF→ON→OFF cycle was resetting the timer to a fresh 2 minutes; fixed in 2026-05-20: `_execute_light_cmd` / `_execute_porch_cmd` now reset `_*_manual_off_time = 0` on explicit ON |
 | Light switch in app does nothing | Check Firebase SSE streams started in log; check MQTT bridge connected to `192.168.1.108:1883` |
-| Porch light not turning on at night | Check radar MQTT arriving (`home/esp32/radar2/motion`); check night hours 18–06; check `_porch_light_on` state |
+| Porch light not turning on at night | Check radar MQTT arriving (`home/esp32/radar1/motion`); check night hours 18–06; check `_lp_rly_motion_triggered` state; check `mqtt_bridge.send_lp_rly_relay()` fired in log |
+| LP porch light not turning off after 5 min | Check `_lp_rly_light_off_timer` still running; confirm bridge forwards `home/switches/L-Porch-Light/state` IN from Pi4 broker so Firebase updates |
 | Radar motion detected but no video recorded | Check `is_video_recording_enabled()` via bot; check camera initialised in log (`Video recorder: OK`); check mosquitto radar bridge is running (`sudo journalctl -u mosquitto \| grep bridge`) |
 | Pi5 not receiving ESP32-RADAR MQTT messages | Check mosquitto radar bridge: `sudo journalctl -u mosquitto \| grep -i bridge`. Bridge subscribes to `home/esp32/radar2/#` on VIP broker and republishes locally. If bridge is down, restart mosquitto on Pi5. |
 | Pi5 not receiving relay/sensor ESP MQTT messages | Expected when Pi5 is BACKUP — `MQTT_HOST=localhost` means Pi5's mybot only processes ESP messages when Pi5 holds the VIP (ESPs connect to VIP broker). This is by design — no duplication between Pis. |
@@ -281,6 +328,12 @@ LD2420 (wired to ESP32-RADAR at 192.168.1.87)
 
 | Date | Change |
 |---|---|
+| 2026-06-23 | **Change night light target from UL+LL relays to ESP32-LP-RLY porch light** — `_do_radar_motion_on()` now sends `send_lp_rly_relay(True)` instead of `send_ul_relay(True)` + `send_ll_relay(True)`; 5-min auto-off timer fires `send_lp_rly_relay(False)` and clears `_lp_rly_motion_triggered`; timer is cancelled on re-entry; `_last_lp_rly_cmd` updated so app status reflects the off. |
+| 2026-06-23 | **ESP32-LP-RLY dual-client MQTT** — firmware adds second `PubSubClient` connecting to Pi5 real IP `192.168.1.108` (separate from the VIP client); subscribes to `home/switches/L-Porch-Light/cmd` on both brokers; exponential backoff reconnect (10 s → 120 s max); relay commands from Pi5 arrive even when Pi4 holds the `.100` VIP. |
+| 2026-06-23 | **Mosquitto bridge extended for LP relay feedback** — `bridge_pi4.conf` adds `topic home/switches/L-Porch-Light/state in 1` and `topic home/switches/L-Porch-Light/availability in 1`; Pi5 now receives relay state from Pi4's broker so `_on_lp_rly_mqtt_state` fires and updates Firebase/app when the 5-min motion timer turns the light off. |
+| 2026-06-23 | **lp_rdr_service.py motion topic changed to `home/pi5/lp-rdr/motion`** — was `home/esp32/radar1/motion`; ESP32-LP-RDR1 now publishes this topic directly to Pi5 real IP `.108`, bypassing the VIP; video recording works even when Pi4 is MASTER or down; removed `_AVAIL_TOPIC` subscription. |
+| 2026-06-23 | **Video resolution reduced to 720p 500 kbps** — was 1080p 1 Mbps; ~75% smaller files cut Telegram delivery time from ~2.5 min to under 30 s. |
+| 2026-06-23 | **Fix Telegram blocking radar** — async send queue + heap guard + socket backoff in ESP32-LP-RDR1 firmware; OTA handle moved to dedicated FreeRTOS task on Core 0. |
 | 2026-06-18 | **Fix: Telegram None guard in `_on_recording_complete` and `_process_motion`** — after making Telegram init non-fatal, `self.telegram` can be `None` at runtime; `_on_recording_complete` was calling `self.telegram.send_video()` unconditionally → `AttributeError: 'NoneType' object has no attribute 'send_video'` logged as "Recording error"; `_process_motion` also called `self.telegram.send_text()` unconditionally; both now guarded with `if self.telegram:`. |
 | 2026-06-18 | **Fix: Telegram init made non-fatal** — `initialize()` now continues if Telegram is unreachable at startup (logs warning, sets `self.telegram = None`, skips bot loop/command registration with a warning); matches Pi4 behavior; prevents Pi5 from failing to start when Telegram is temporarily down during a master failover. |
 | 2026-06-18 | **Fix: Firebase startup pre-seeding** — `initialize()` now reads `living_room`, `lobby`, and `lower_porch_light` states from Firebase before starting SSE streams (`firebase.get_light_command()`); sets `_last_*_cmd` for all three lights; also sets `_ll_motion_triggered = True` if LL light was ON at startup (treats it as motion-owned to avoid the manually-ON guard blocking motion auto-ON during startup window). Without this both Pis executed the initial SSE `put` event as a real relay command on every restart — causing phantom toggles. |
