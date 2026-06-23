@@ -540,7 +540,15 @@ class RaspberryPiController:
             self._check_stop_recording(current_time)
 
     def _trigger_light_control(self) -> None:
-        """Activate light on motion during night hours."""
+        """Activate light on motion during night hours — MASTER only."""
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            if '192.168.1.100' not in vip.stdout:
+                return
+        except Exception:
+            pass
+
         current_time = time.time()
         current_hour = datetime.now().hour
 
@@ -642,7 +650,14 @@ class RaspberryPiController:
         self._light_cmd_timer.start()
 
     def _on_schedule_ll_relay(self, cmd: bool) -> None:
-        """Scheduler ON/OFF for lower-lobby relay."""
+        """Scheduler ON/OFF for lower-lobby relay — MASTER only."""
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            if '192.168.1.100' not in vip.stdout:
+                return
+        except Exception:
+            pass
         if cmd:
             self._ll_motion_triggered = False
         else:
@@ -736,14 +751,22 @@ class RaspberryPiController:
         except (ValueError, AttributeError):
             relay_on = payload.upper() == 'ON'
 
+        # Check VIP once — used by both the firmware guard and the Firebase write.
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            is_master = '192.168.1.100' in vip.stdout
+        except Exception:
+            is_master = False
+
         # Skip firmware guard on the first state message after a reconnect — the ESP01
         # firmware turns the relay ON by itself on MQTT reconnect, which would otherwise
         # set _last_living_room_cmd=True and lock the light perpetually ON.
         if self._ll_was_offline:
             self._ll_was_offline = False
             logger.debug('LL first state after reconnect — firmware guard suppressed')
-        elif not relay_on and not self._ll_motion_triggered and self._last_living_room_cmd:
-            # Firmware auto-off fired while light was manually on — re-send ON.
+        elif not relay_on and not self._ll_motion_triggered and self._last_living_room_cmd and is_master:
+            # Only MASTER re-sends ON after firmware auto-off — BACKUP must not fight Pi4.
             logger.info('LL firmware auto-off on manually-on light — re-sending ON')
             if self._light_cmd_timer is not None:
                 self._light_cmd_timer.cancel()
@@ -756,22 +779,15 @@ class RaspberryPiController:
         # re-execution when it sees the updated state value.
         self._last_living_room_cmd = relay_on
 
-        # Only the MASTER Pi syncs LL-RLY state back to Firebase; the BACKUP Pi
-        # still tracks _last_living_room_cmd locally for its own firmware guard.
-        try:
-            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
-                                 capture_output=True, text=True, timeout=2)
-            if '192.168.1.100' in vip.stdout:
-                def _update() -> None:
-                    if self.firebase:
-                        self.firebase.push_ll_relay_status(
-                            reachable=True, relay_on=relay_on
-                        )
-                        self.firebase.set_light_confirmed('living_room', relay_on)
-                        self.firebase.set_light_state('living_room', relay_on)
-                threading.Thread(target=_update, daemon=True).start()
-        except Exception:
-            pass
+        if is_master:
+            def _update() -> None:
+                if self.firebase:
+                    self.firebase.push_ll_relay_status(
+                        reachable=True, relay_on=relay_on
+                    )
+                    self.firebase.set_light_confirmed('living_room', relay_on)
+                    self.firebase.set_light_state('living_room', relay_on)
+            threading.Thread(target=_update, daemon=True).start()
 
     def _on_ul_mqtt_state(self, payload: str) -> None:
         """
@@ -783,8 +799,15 @@ class RaspberryPiController:
         relay_on = payload.upper() == 'ON'
         logger.info(f'Upper-lobby relay state via MQTT: {"ON" if relay_on else "OFF"}')
 
-        # If firmware auto-off fired while light was manually on, re-send ON and ignore
-        if not relay_on and not self._ul_motion_triggered and self._last_ul_cmd:
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            is_master = '192.168.1.100' in vip.stdout
+        except Exception:
+            is_master = False
+
+        # If firmware auto-off fired while light was manually on, re-send ON — MASTER only.
+        if not relay_on and not self._ul_motion_triggered and self._last_ul_cmd and is_master:
             logger.info('UL firmware auto-off on manually-on light — re-sending ON')
             if self._ul_cmd_timer is not None:
                 self._ul_cmd_timer.cancel()
@@ -982,6 +1005,15 @@ class RaspberryPiController:
 
         Debounces rapid bursts, then sends the final command to ESP01-UL-RLY via MQTT.
         """
+        # Only the MASTER Pi handles app commands — same guard as _on_firebase_light_cmd.
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            if '192.168.1.100' not in vip.stdout:
+                return
+        except Exception:
+            pass
+
         if cmd == self._last_ul_cmd:
             logger.debug(f'Firebase stream: upper-lobby light {"ON" if cmd else "OFF"} — ignored (matches current state)')
             return
@@ -1023,7 +1055,14 @@ class RaspberryPiController:
             logger.warning(f'Porch command execute error: {e}')
 
     def _on_schedule_ul_relay(self, cmd: bool) -> None:
-        """Scheduler ON/OFF for upper-lobby relay."""
+        """Scheduler ON/OFF for upper-lobby relay — MASTER only."""
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            if '192.168.1.100' not in vip.stdout:
+                return
+        except Exception:
+            pass
         if cmd:
             self._ul_motion_triggered = False
         else:
