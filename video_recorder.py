@@ -92,7 +92,7 @@ class VideoRecorder:
                 # Pi 5 (PiSP/RP1) requires an explicit resolution — full sensor
                 # resolution (4608x2592) causes "Failed to start media pipeline: -32"
                 video_config = self._camera.create_video_configuration(
-                    main={"size": (1920, 1080)},
+                    main={"size": (1280, 720)},
                     buffer_count=6
                 )
                 self._camera.configure(video_config)

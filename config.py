@@ -255,7 +255,7 @@ class VideoConfig:
     min_duration: int = 10
     max_duration: int = 120
     motion_timeout: int = 10
-    bitrate: int = 1_000_000
+    bitrate: int = 500_000
     disk_usage_threshold: float = 75.0
 
     def __post_init__(self):
