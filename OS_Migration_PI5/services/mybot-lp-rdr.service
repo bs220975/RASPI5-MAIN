@@ -1,0 +1,26 @@
+[Unit]
+Description=LP-RDR Monitor — ESP32-LP-RDR1 radar video recorder
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi5
+WorkingDirectory=/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN
+
+ExecStart=/bin/bash -c 'source /home/pi5/myenv/bin/activate && exec python /home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/lp_rdr_service.py'
+
+Environment="PYTHONUNBUFFERED=1"
+Environment="PATH=/home/pi5/myenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="MQTT_HOST=localhost"
+
+StandardOutput=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/lp_rdr_service.log
+StandardError=append:/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/lp_rdr_error.log
+
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+
+[Install]
+WantedBy=multi-user.target

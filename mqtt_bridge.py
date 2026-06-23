@@ -59,6 +59,9 @@ _RADAR_MOTION_TOPIC = 'home/esp32/radar1/motion'
 _RADAR_AVAIL_TOPIC  = 'home/esp32/radar1/availability'
 _RADAR_CMD_TOPIC    = 'home/esp32/radar1/cmd'          # Pi → ESP32: TRIGGER
 
+# ── LP-RDR monitor service control (mybot-lp-rdr.service) ───────────────────
+_LP_RDR_CMD_TOPIC   = 'home/pi5/lp-rdr/cmd'           # Pi → lp_rdr_service: VIDEO_ON / VIDEO_OFF / RECORD_<sec>
+
 # ── Flow test (/testflow command chain) ─────────────────────────────────────
 _FLOW_TEST_TOPIC        = 'home/test/upper-lobby/flow'          # ESP32 → Pi:    JSON {t1, device}
 _ESP01_TEST_CMD_TOPIC   = 'home/test/upper-lobby/esp01/cmd'     # Pi → ESP01:    JSON {t1, t2, device}

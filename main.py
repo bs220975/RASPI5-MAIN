@@ -237,17 +237,10 @@ class RaspberryPiController:
             self.aws_door = None
             logger.info("AWS IoT door publisher: skipped (no reed switch on Pi5)")
 
-            # Initialize video recorder
-            logger.info("Initializing video recorder...")
-            self.recorder = VideoRecorder(self.config.video)
-            self.recorder.set_callbacks(
-                on_complete=self._on_recording_complete,
-                on_cleanup=self._on_disk_cleanup
-            )
-            if self.recorder.initialize():
-                logger.info("Video recorder: OK")
-            else:
-                logger.warning("Camera initialization failed - recording disabled")
+            # Camera is managed exclusively by lp_rdr_service.py (mybot-lp-rdr.service).
+            # main.py does not open the camera — picamera2 only allows one owner at a time.
+            self.recorder = None
+            logger.info("Video recorder: delegated to lp_rdr_service")
 
             # Initialize bot command handler
             logger.info("Initializing bot command handler...")
@@ -963,7 +956,8 @@ class RaspberryPiController:
                 threading.Thread(target=self._push_firebase_status, daemon=True).start()
 
     def _do_radar_motion_on(self) -> None:
-        """Execute confirmed radar motion ON actions (lights, Telegram, recording)."""
+        """Execute confirmed radar motion ON actions (lights only).
+        Telegram notification and video recording are handled by lp_rdr_service.py."""
         current_time = time.time()
         current_hour = datetime.now().hour
         is_night = (current_hour >= 18) or (current_hour < 6)
@@ -983,17 +977,6 @@ class RaspberryPiController:
                 logger.info('Radar motion ON (night) → lower-lobby relay ON')
                 self.mqtt_bridge.send_ll_relay(True)
                 self._ll_motion_triggered = True
-
-        # ── Telegram motion notification (throttled) ─────────────────────
-        cooldown = self.config.motion_message_cooldown
-        if current_time - self._last_motion_message_time > cooldown:
-            if self.telegram:
-                self.telegram.send_text("Motion detected by ESP32 radar sensor")
-            self._last_motion_message_time = current_time
-
-        # ── Video recording ───────────────────────────────────────────────
-        if self.bot_handler and self.bot_handler.is_video_recording_enabled():
-            self._handle_video_recording(current_time, trigger="radar")
 
         # ── Firebase status ───────────────────────────────────────────────
         if self.firebase:
@@ -1364,8 +1347,7 @@ class RaspberryPiController:
             self.telegram.send_text(msg)
 
             # Camera status
-            camera_status = "OK" if (self.recorder and self.recorder._camera) else "Not available"
-            self.telegram.send_text(f"Camera: {camera_status}")
+            self.telegram.send_text("Camera: managed by lp_rdr_service")
 
         if self.firebase:
             self._push_firebase_status()
