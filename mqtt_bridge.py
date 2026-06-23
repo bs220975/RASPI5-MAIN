@@ -22,8 +22,8 @@ Topics managed:
     home/esp32/lp-rly/ota/status           ESP32-LP-RLY → Pi: OTA progress JSON
     home/esp32/lp-rly/telegram             ESP32-LP-RLY → Pi: plain-text Telegram msg
 
-    home/esp32/radar2/motion            ESP32-RADAR → Pi:    ON / OFF
-    home/esp32/radar2/availability      ESP32-RADAR → Pi:    online / offline
+    home/esp32/radar1/motion            ESP32-RADAR → Pi:    ON / OFF
+    home/esp32/radar1/availability      ESP32-RADAR → Pi:    online / offline
 """
 import logging
 from typing import Callable, Optional
@@ -55,9 +55,9 @@ _LP_RLY_OTA_STATUS_TOPIC = 'home/esp32/lp-rly/ota/status'
 _LP_RLY_TELEGRAM_TOPIC   = 'home/esp32/lp-rly/telegram'
 
 # ── Radar sensor (ESP32-RADAR at 192.168.1.87) ──────────────────────────────
-_RADAR_MOTION_TOPIC = 'home/esp32/radar2/motion'
-_RADAR_AVAIL_TOPIC  = 'home/esp32/radar2/availability'
-_RADAR_CMD_TOPIC    = 'home/esp32/radar2/cmd'          # Pi → ESP32: TRIGGER
+_RADAR_MOTION_TOPIC = 'home/esp32/radar1/motion'
+_RADAR_AVAIL_TOPIC  = 'home/esp32/radar1/availability'
+_RADAR_CMD_TOPIC    = 'home/esp32/radar1/cmd'          # Pi → ESP32: TRIGGER
 
 # ── Flow test (/testflow command chain) ─────────────────────────────────────
 _FLOW_TEST_TOPIC        = 'home/test/upper-lobby/flow'          # ESP32 → Pi:    JSON {t1, device}
