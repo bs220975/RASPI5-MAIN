@@ -143,6 +143,8 @@ class RaspberryPiController:
         self._lp_rly_light_on: bool = False
         self._last_lp_rly_cmd: Optional[bool] = None
         self._lp_rly_cmd_timer: Optional[threading.Timer] = None
+        self._lp_rly_motion_triggered: bool = False   # True only when last ON was from radar motion
+        self._lp_rly_light_off_timer: Optional[threading.Timer] = None
 
         # MQTT availability flags — used by _get_local_device_states()
         self._ul_reachable: bool = False
@@ -867,6 +869,9 @@ class RaspberryPiController:
             if self._ll_light_off_timer is not None:
                 self._ll_light_off_timer.cancel()
                 self._ll_light_off_timer = None
+            if self._lp_rly_light_off_timer is not None:
+                self._lp_rly_light_off_timer.cancel()
+                self._lp_rly_light_off_timer = None
 
             # Reset the confirm window on every motion=ON (handles rapid re-entry)
             if self._radar_motion_confirm_timer is not None:
@@ -896,49 +901,25 @@ class RaspberryPiController:
                 )
                 return
 
-            # ── Upper-lobby light off countdown (only if motion-triggered) ─
-            if self._ul_motion_triggered:
-                logger.info('Radar motion OFF → upper-lobby light off in 5 min')
+            # ── LP porch light off countdown (only if motion-triggered) ──────
+            if self._lp_rly_motion_triggered:
+                logger.info('Radar motion OFF → LP porch light off in 5 min')
 
-                def _turn_off() -> None:
-                    if not self._ul_motion_triggered:
-                        logger.debug('UL off timer skipped — light re-triggered manually/schedule')
-                        self._ul_light_off_timer = None
+                def _turn_off_lp() -> None:
+                    if not self._lp_rly_motion_triggered:
+                        logger.debug('LP off timer skipped — light re-triggered manually/schedule')
+                        self._lp_rly_light_off_timer = None
                         return
                     if self.mqtt_bridge:
-                        logger.info('Upper-lobby light off timer fired')
-                        # Clear before sending so _on_ul_mqtt_state firmware-auto-off
-                        # guard doesn't see _last_ul_cmd=True and re-send ON.
-                        self._last_ul_cmd = False
-                        self.mqtt_bridge.send_ul_relay(False)
-                    self._ul_light_off_timer = None
-                    self._ul_motion_triggered = False
+                        logger.info('LP porch light off timer fired')
+                        self._last_lp_rly_cmd = False
+                        self.mqtt_bridge.send_lp_rly_relay(False)
+                    self._lp_rly_light_off_timer = None
+                    self._lp_rly_motion_triggered = False
 
-                self._ul_light_off_timer = threading.Timer(300.0, _turn_off)
-                self._ul_light_off_timer.daemon = True
-                self._ul_light_off_timer.start()
-
-            # ── Lower-lobby light off countdown (only if motion-triggered) ─
-            if self._ll_motion_triggered:
-                logger.info('Radar motion OFF → lower-lobby light off in 5 min')
-
-                def _turn_off_ll() -> None:
-                    if not self._ll_motion_triggered:
-                        logger.debug('LL off timer skipped — light re-triggered manually/schedule')
-                        self._ll_light_off_timer = None
-                        return
-                    if self.mqtt_bridge:
-                        logger.info('Lower-lobby light off timer fired')
-                        # Clear before sending so _on_ll_mqtt_state firmware-auto-off
-                        # guard doesn't see _last_living_room_cmd=True and re-send ON.
-                        self._last_living_room_cmd = False
-                        self.mqtt_bridge.send_ll_relay(False)
-                    self._ll_light_off_timer = None
-                    self._ll_motion_triggered = False
-
-                self._ll_light_off_timer = threading.Timer(300.0, _turn_off_ll)
-                self._ll_light_off_timer.daemon = True
-                self._ll_light_off_timer.start()
+                self._lp_rly_light_off_timer = threading.Timer(300.0, _turn_off_lp)
+                self._lp_rly_light_off_timer.daemon = True
+                self._lp_rly_light_off_timer.start()
 
             # ── Recording stop after motion_timeout delay ─────────────────
             def _delayed_stop() -> None:
@@ -962,21 +943,11 @@ class RaspberryPiController:
         current_hour = datetime.now().hour
         is_night = (current_hour >= 18) or (current_hour < 6)
 
-        # ── Upper-lobby + lower-lobby lights (night only, respect manual overrides) ──
+        # ── LP porch light (ESP32-LP-RLY, night only) ────────────────────────────
         if is_night and self.mqtt_bridge:
-            if current_time - self._ul_manual_off_time < 120:
-                logger.debug('Radar motion: upper-lobby manual override active — skipping auto-ON')
-            else:
-                logger.info('Radar motion ON (night) → upper-lobby relay ON')
-                self.mqtt_bridge.send_ul_relay(True)
-                self._ul_motion_triggered = True
-
-            if current_time - self._living_room_manual_off_time < 120:
-                logger.debug('Radar motion: lower-lobby manual override active — skipping auto-ON')
-            else:
-                logger.info('Radar motion ON (night) → lower-lobby relay ON')
-                self.mqtt_bridge.send_ll_relay(True)
-                self._ll_motion_triggered = True
+            logger.info('Radar motion ON (night) → LP porch relay ON')
+            self.mqtt_bridge.send_lp_rly_relay(True)
+            self._lp_rly_motion_triggered = True
 
         # ── Firebase status ───────────────────────────────────────────────
         if self.firebase:
