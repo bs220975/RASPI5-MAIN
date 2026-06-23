@@ -26,9 +26,8 @@ __version__ = '1.0.0'
 
 logger = logging.getLogger(__name__)
 
-_MOTION_TOPIC = 'home/esp32/radar1/motion'
-_AVAIL_TOPIC  = 'home/esp32/radar1/availability'
-_CMD_TOPIC    = 'home/pi5/lp-rdr/cmd'   # VIDEO_ON | VIDEO_OFF | RECORD_<sec>
+_MOTION_TOPIC = 'home/pi5/lp-rdr/motion'  # ESP32 → Pi5 direct (Pi4-independent)
+_CMD_TOPIC    = 'home/pi5/lp-rdr/cmd'     # VIDEO_ON | VIDEO_OFF | RECORD_<sec>
 
 _LOG_ERROR = '/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/lp_rdr_error.log'
 _LOG_SVC   = '/home/pi5/pi5_drive/Git_projects/RASPI5-MAIN/logs/lp_rdr_service.log'
@@ -137,7 +136,7 @@ class LpRdrService:
 
     def _on_mqtt_connect(self, client, userdata, flags, rc) -> None:
         if rc == 0:
-            client.subscribe([(_MOTION_TOPIC, 1), (_AVAIL_TOPIC, 1), (_CMD_TOPIC, 1)])
+            client.subscribe([(_MOTION_TOPIC, 1), (_CMD_TOPIC, 1)])
             logger.info('MQTT: connected — subscribed to motion + cmd topics')
         else:
             logger.error(f'MQTT: connect failed rc={rc}')
