@@ -146,9 +146,40 @@ Serial `/dev/serial0` — LD2420 radar (115200 baud).
 | Service | Role | Notes |
 |---------|------|-------|
 | `mybot.service` | Main bot (`RASPI5-MAIN/main.py`) | MQTT_HOST=localhost (Pi5's own broker) |
+| `mybot-lp-rdr.service` | **Porch camera recorder** (`lp_rdr_service.py`) | Separate process — owns picamera2 exclusively |
 | `mqttdatainflux.service` | MQTT → InfluxDB bridge | MQTT_HOST=localhost |
 | `mosquitto` | MQTT broker `0.0.0.0:1883` | Bridges specific topics from Pi4 |
 | `influxdb` | InfluxDB 2.x `http://[::1]:8086` | org: `pi4org`, bucket: `pi4data` |
+
+**Why lp_rdr_service is a separate process:** picamera2 can only be owned by one process at a time. Isolating it means porch recording keeps running even if `mybot.service` restarts, and the camera is never blocked by main bot's MQTT/Firebase work.
+
+### lp_rdr_service — Porch Camera Service
+
+File: `RASPI5-MAIN/lp_rdr_service.py` | Systemd unit: `mybot-lp-rdr.service`
+
+**MQTT topics (connects to localhost broker):**
+
+| Topic | Direction | Purpose |
+|-------|-----------|---------|
+| `home/pi5/lp-rdr/motion` | IN (QoS 1) | ESP32-LP-RDR1 motion ON/OFF — triggers recording |
+| `home/pi5/lp-rdr/cmd` | IN (QoS 1) | Control commands from main mybot service |
+
+**Commands accepted on `home/pi5/lp-rdr/cmd`:**
+
+| Payload | Effect |
+|---------|--------|
+| `VIDEO_ON` | Enable video recording (default: enabled) |
+| `VIDEO_OFF` | Disable video recording |
+| `RECORD_<sec>` | Manual recording for N seconds (5–120s) |
+
+**Motion flow inside lp_rdr_service:**
+1. `home/pi5/lp-rdr/motion=ON` received → arm confirm timer (`radar_confirm_window_s`)
+2. If still ON after confirm window → send Telegram text alert + start recording
+3. `home/pi5/lp-rdr/motion=OFF` → arm stop timer (`motion_timeout` seconds)
+4. Stop timer fires → `stop_recording()` → ffmpeg converts H264→MP4 → `send_video()` to Telegram
+5. If motion=ON arrives again before stop timer: extend recording (cancel stop timer, continue)
+
+**Logs:** `RASPI5-MAIN/logs/lp_rdr_service.log` (INFO+) and `lp_rdr_error.log` (WARNING+)
 
 ### Pi5 — Mosquitto Bridge (to Pi4)
 
@@ -167,13 +198,14 @@ Config: `/etc/mosquitto/conf.d/bridge_pi4.conf`
 
 | File | Role |
 |------|------|
-| `main.py` | Main controller |
-| `mqtt_bridge.py` | Paho MQTT — subscribes to bridged topics |
+| `main.py` | Main controller — relay control, Firebase SSE, VIP guard logic |
+| `lp_rdr_service.py` | **Standalone porch camera service** — owns picamera2, subscribes to `home/pi5/lp-rdr/motion`, records + sends to Telegram |
+| `mqtt_bridge.py` | Paho MQTT — subscribes to bridged topics from Pi4 |
 | `firebase_logger.py` | Firebase RTDB writes + SSE streams |
 | `sensors.py` | LD2420 radar, PIR, MMS, reed switch |
 | `config.py` | All config constants |
-| `video_recorder.py` | **picamera2 → H264 → ffmpeg MP4** |
-| `telegram_handler.py` | Telegram API wrapper |
+| `video_recorder.py` | picamera2 → H264 → ffmpeg MP4 (used by lp_rdr_service, NOT main.py) |
+| `telegram_handler.py` | Telegram API wrapper (priority queue: TEXT fast lane, VIDEO/media separate worker) |
 | `bot_commands.py` | Telegram command dispatch |
 | `influxdb_logger.py` | Motion → InfluxDB |
 | `esp_devices.py` | HTTP fallback for ESP01-LL-RLY heartbeat |
@@ -525,6 +557,60 @@ ESP32-LP-RDR1 detects motion
         └── Pi5 _do_radar_motion_on(): checks _lp_rly_manual_off_time → sends ON (if not suppressed)
 ```
 Both Pis may send ON — that's idempotent (relay is already ON). The 120s `_lp_rly_manual_off_time` on each Pi independently suppresses radar re-trigger after manual OFF.
+
+---
+
+## Video Recording Pipeline
+
+### Cameras
+
+| Pi | Area recorded | Camera type | Video dir | Max recording |
+|----|--------------|-------------|-----------|---------------|
+| Pi4 | Lower lobby | CSI (picamera2, 1280×720) | `/home/pi/raspi_camera_videos/` | 120s |
+| Pi5 | Lower porch | CSI (picamera2, 1280×720) | `/home/pi5/raspi_camera_videos/` | 120s |
+
+### Timing (from live log analysis)
+
+| Stage | Typical time |
+|-------|-------------|
+| Motion detected → recording starts | ~2 seconds |
+| H264 → MP4 conversion (ffmpeg -c:v copy) | <1 second |
+| MP4 ready → Telegram upload complete | 18s–2.5 min (variable) |
+| **Total: motion → video on Telegram** | **~1.5–4 minutes** |
+
+**Bottlenecks:**
+- Upload speed from Pi to Telegram: ~148 KB/s (home WiFi ISP limit)
+- Telegram Bot API server-side processing: highly variable (18s to 2+ min) — outside our control
+- File size: 1–9 MB depending on motion duration. Telegram API rate-limits bots more than users.
+
+**Why it can't be made faster:** ISP upload cap + Telegram server variability. The only levers are reducing bitrate/resolution (cuts file size → proportionally cuts upload time), or sending as `sendDocument` instead of `sendVideo` (skips Telegram's server-side re-encoding, often faster but loses inline playback).
+
+### How Pi4 records (inside main.py)
+
+```
+LD2420 radar detects motion → main loop → _trigger_light_control() + _handle_video_recording()
+  → VideoRecorder.start_recording() → _recording_worker thread
+      → picamera2 H264 → stop on motion timeout or 120s max
+      → ffmpeg H264→MP4 → _on_recording_complete() callback
+          → self.telegram.send_video(mp4_path)   [gated by is_bot_video_enabled()]
+```
+
+Two separate Telegram toggles:
+- `is_video_recording_enabled()` → controls whether camera records at all
+- `is_bot_video_enabled()` → controls whether completed video is sent to Telegram
+
+### How Pi5 records (lp_rdr_service.py — separate process)
+
+```
+ESP32-LP-RDR1 → MQTT home/pi5/lp-rdr/motion=ON → lp_rdr_service
+  → confirm window → telegram.send_text("Motion detected")
+  → VideoRecorder.start_recording() → _recording_worker thread
+      → picamera2 H264 → stop on motion_timeout or 120s max
+      → ffmpeg H264→MP4 → _on_recording_complete() callback
+          → telegram.send_video(mp4_path, caption="ESP32-LP-RDR1 motion — Xs")
+```
+
+Pi5's `main.py` does NOT touch the camera. It sends `home/pi5/lp-rdr/cmd` to control lp_rdr_service (VIDEO_ON/OFF/RECORD_N).
 
 ---
 
