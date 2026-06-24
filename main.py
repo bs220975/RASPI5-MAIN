@@ -564,13 +564,21 @@ class RaspberryPiController:
 
         def activate():
             try:
+                sent = False
                 if self.mqtt_bridge and self.mqtt_bridge.is_connected:
                     if self.mqtt_bridge.send_ll_relay(True):
-                        return
+                        sent = True
                 # HTTP fallback — used until ESP01 firmware supports MQTT
                 success, response = self.esp.send_to_lobby("lighton")
                 if success:
-                    logger.debug(f"Light activated (HTTP): {response}")
+                    sent = True
+                if sent:
+                    self._ll_motion_triggered = True
+                    self._last_living_room_cmd = True
+                    logger.info("Light activated by motion")
+                    if self.firebase:
+                        self.firebase.set_light_confirmed('living_room', True)
+                        self.firebase.set_light_state('living_room', True)
             except Exception as e:
                 logger.error(f"Light activation error: {e}")
 
@@ -1117,7 +1125,9 @@ class RaspberryPiController:
 
     def _on_schedule_lp_rly_relay(self, cmd: bool) -> None:
         """Scheduler ON/OFF for LP-RLY relay."""
-        if not cmd:
+        if cmd:
+            self._lp_rly_motion_triggered = False
+        else:
             # Clear BEFORE sending so MQTT state confirmation doesn't trigger the firmware-auto-off counter
             self._last_lp_rly_cmd = False
         if self.mqtt_bridge:
