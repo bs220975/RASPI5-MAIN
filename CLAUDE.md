@@ -102,7 +102,7 @@ Serial `/dev/serial0` — LD2420 radar (115200 baud). `enable_uart=1` in `/boot/
 | `local_api_server.py` | LAN fallback HTTP API port 5757 |
 | `light_scheduler.py` | APScheduler daily on/off timers |
 | `influxdb_logger.py` | Motion events → InfluxDB |
-| `video_recorder.py` | Pi camera (not used — Pi4 has no camera) |
+| `video_recorder.py` | **Pi camera — lobby area recording** (triggered by LD2420 radar, logic inside main.py) |
 | `esp_devices.py` | HTTP fallback for ESP heartbeat |
 
 ### Pi4 — Aliases
@@ -414,22 +414,31 @@ Flutter app taps light switch
   (Pi deduplicates if both arrive)
 ```
 
-### Motion → Light ON (night) + Video
+### Motion → Lobby Light + Lobby Camera (Pi4 — LD2420 radar)
 
 ```
-ESP32-LP-RDR1 radar detects motion
+LD2420 radar (/dev/serial0) detects motion in lower lobby
+  └── Pi4 main loop
+        ├── _trigger_light_control(): night? → MQTT cmd → ESP01-LL-RLY ON
+        └── _handle_video_recording(): → picamera2 records lobby area → MP4 → Telegram
+```
+
+### Motion → Porch Light + Porch Camera (Pi5 — ESP32-LP-RDR1)
+
+```
+ESP32-LP-RDR1 radar (192.168.1.87) detects motion on lower porch
   ├── MQTT home/esp32/radar1/motion=ON → Pi4 broker
   │     ├── Pi4 _handle_radar_lp_rly(): night? → MQTT cmd → ESP32-LP-RLY ON
-  │     ├── Pi4 _trigger_light_control(): night? → MQTT cmd → ESP01-LL-RLY ON
   │     └── bridges home/esp32/radar1/# → Pi5 broker → Pi5 _do_radar_motion_on()
-  │           → Pi5 night? → MQTT cmd → ESP32-LP-RLY ON (idempotent if Pi4 already sent)
-  ├── MQTT home/pi5/lp-rdr/motion=ON → Pi5 direct (ESP32-LP-RDR1 dual-publishes)
-  │     └── Pi5 camera recording + Telegram video
-  ├── Telegram direct (throttled 60 s) — Pi-independent
-  └── AWS IoT → Lambda → FCM (app siren) — Pi-independent
+  │           → Pi5 night? → MQTT cmd → ESP32-LP-RLY ON (idempotent)
+  └── MQTT home/pi5/lp-rdr/motion=ON → Pi5 direct (ESP32-LP-RDR1 dual-publishes)
+        └── lp_rdr_service.py: picamera2 records porch area → MP4 → Telegram
+  (Telegram alert + AWS IoT → Lambda → FCM also fire — Pi-independent)
 ```
 
-Note: ESP32-LP-RDR1 publishes to **two brokers** simultaneously — Pi4 for LL/UL relay control, Pi5 direct for camera + LP-RLY duplicate trigger. Both `home/esp32/radar1/#` (bridged) and `home/pi5/lp-rdr/motion` (direct) arrive at Pi5.
+**Key architectural difference:** Pi4 video is handled INSIDE `main.py` (`_handle_video_recording`). Pi5 video is a SEPARATE process (`lp_rdr_service.py` / `mybot-lp-rdr.service`) that receives motion via MQTT `home/pi5/lp-rdr/motion` from ESP32-LP-RDR1 directly.
+
+Note: ESP32-LP-RDR1 publishes to **two brokers** simultaneously — Pi4 broker for porch relay control, Pi5 broker direct for camera trigger. Both `home/esp32/radar1/#` (bridged Pi4→Pi5) and `home/pi5/lp-rdr/motion` (direct) arrive at Pi5.
 
 ### Motion → Light OFF (5-min timer)
 
@@ -673,7 +682,7 @@ cd /home/pi5/pi5_drive/Git_projects/ESP32-LP-RLY
 | Role | Main MQTT broker, all logic | Camera recording, BACKUP logic |
 | IP | 192.168.1.122 | 192.168.1.108 |
 | User | `pi` | `pi5` |
-| Camera | No | Yes (picamera2, system-wide) |
+| Camera | Yes — CSI camera, **lower lobby area** | Yes — CSI camera, **lower porch area** |
 | MQTT broker | Primary (ESP devices connect here) | Bridges from Pi4 |
 | mybot MQTT_HOST | 192.168.1.122 | localhost |
 | InfluxDB | Yes (main) | Yes (secondary) |
