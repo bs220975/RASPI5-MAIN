@@ -542,7 +542,7 @@ class RaspberryPiController:
             if '192.168.1.100' not in vip.stdout:
                 return
         except Exception:
-            pass
+            return  # fail safe: don't assume master if VIP check throws
 
         current_time = time.time()
         current_hour = datetime.now().hour
@@ -587,7 +587,7 @@ class RaspberryPiController:
             if '192.168.1.100' not in vip.stdout:
                 return
         except Exception:
-            pass
+            return  # fail safe: don't assume master if VIP check throws
 
         try:
             state = self.esp.get_relay_state()
@@ -626,7 +626,7 @@ class RaspberryPiController:
             if '192.168.1.100' not in vip.stdout:
                 return
         except Exception:
-            pass
+            return  # fail safe: don't assume master if VIP check throws
 
         if cmd == self._last_living_room_cmd:
             logger.debug(f'Firebase stream: living room {"ON" if cmd else "OFF"} — ignored (matches current state)')
@@ -652,7 +652,7 @@ class RaspberryPiController:
             if '192.168.1.100' not in vip.stdout:
                 return
         except Exception:
-            pass
+            return  # fail safe: don't assume master if VIP check throws
         if cmd:
             self._ll_motion_triggered = False
         else:
@@ -966,7 +966,7 @@ class RaspberryPiController:
             if '192.168.1.100' not in vip.stdout:
                 return
         except Exception:
-            pass
+            return  # fail safe: don't assume master if VIP check throws
 
         if cmd == self._last_ul_cmd:
             logger.debug(f'Firebase stream: upper-lobby light {"ON" if cmd else "OFF"} — ignored (matches current state)')
@@ -1016,7 +1016,7 @@ class RaspberryPiController:
             if '192.168.1.100' not in vip.stdout:
                 return
         except Exception:
-            pass
+            return  # fail safe: don't assume master if VIP check throws
         if cmd:
             self._ul_motion_triggered = False
         else:
