@@ -145,6 +145,7 @@ class RaspberryPiController:
         self._lp_rly_cmd_timer: Optional[threading.Timer] = None
         self._lp_rly_motion_triggered: bool = False   # True only when last ON was from radar motion
         self._lp_rly_light_off_timer: Optional[threading.Timer] = None
+        self._lp_rly_manual_off_time: float = 0.0    # timestamp of last manual OFF — suppresses radar re-trigger
 
         # MQTT availability flags — used by _get_local_device_states()
         self._ul_reachable: bool = False
@@ -953,6 +954,9 @@ class RaspberryPiController:
 
         # ── LP porch light (ESP32-LP-RLY, night only) ────────────────────────────
         if is_night and self.mqtt_bridge:
+            if time.time() - self._lp_rly_manual_off_time < 120:
+                logger.debug('Radar motion: LP-RLY manual override active — skipping (Pi5)')
+                return
             logger.info('Radar motion ON (night) → LP porch relay ON')
             self.mqtt_bridge.send_lp_rly_relay(True)
             self._lp_rly_motion_triggered = True
@@ -1047,8 +1051,19 @@ class RaspberryPiController:
         relay_on = payload.upper() == 'ON'
         logger.info(f'LP-RLY state via MQTT: {"ON" if relay_on else "OFF"}')
 
-        # If firmware auto-off fired while light was manually on, re-send ON and ignore
-        if not relay_on and self._last_lp_rly_cmd:
+        # VIP check — used by both the firmware guard and the Firebase write.
+        try:
+            vip = subprocess.run(['ip', 'addr', 'show', 'wlan0'],
+                                 capture_output=True, text=True, timeout=2)
+            is_master = '192.168.1.100' in vip.stdout
+        except Exception:
+            is_master = False
+
+        # Firmware auto-off guard — MASTER only.
+        # Without is_master: when Pi4 (master) deliberately sends LP-RLY OFF, Pi5 would
+        # immediately re-send ON because _last_lp_rly_cmd was still True from the previous
+        # state — causing the porch light to toggle on/off in a loop.
+        if not relay_on and self._last_lp_rly_cmd and is_master:
             logger.info('LP-RLY firmware auto-off on manually-on light — re-sending ON')
             if self._lp_rly_cmd_timer is not None:
                 self._lp_rly_cmd_timer.cancel()
@@ -1061,12 +1076,13 @@ class RaspberryPiController:
         self._lp_rly_reachable = True
         self._last_lp_rly_cmd = relay_on
 
-        def _update() -> None:
-            if self.firebase:
-                self.firebase.push_lp_rly_status(reachable=True, relay_on=relay_on)
-                self.firebase.set_light_confirmed('lower_porch_light', relay_on)
-                self.firebase.set_light_state('lower_porch_light', relay_on)
-        threading.Thread(target=_update, daemon=True).start()
+        if is_master:
+            def _update() -> None:
+                if self.firebase:
+                    self.firebase.push_lp_rly_status(reachable=True, relay_on=relay_on)
+                    self.firebase.set_light_confirmed('lower_porch_light', relay_on)
+                    self.firebase.set_light_state('lower_porch_light', relay_on)
+            threading.Thread(target=_update, daemon=True).start()
 
     def _on_lp_rly_availability_changed(self, available: bool) -> None:
         """
@@ -1093,6 +1109,13 @@ class RaspberryPiController:
         Debounces rapid bursts (Firebase reconnect replays), then sends
         the final ON/OFF to ESP32-LP-RLY via MQTT.
         """
+        # Track manual OFF regardless of VIP so _do_radar_motion_on can suppress
+        # radar re-trigger for 2 min after any intentional OFF (local HTTP or Firebase).
+        if not cmd:
+            self._lp_rly_manual_off_time = time.time()
+        else:
+            self._lp_rly_manual_off_time = 0.0
+
         if cmd == self._last_lp_rly_cmd:
             logger.debug(f'Firebase stream: L-Porch-Light {"ON" if cmd else "OFF"} — ignored (matches current state)')
             return
@@ -1113,6 +1136,12 @@ class RaspberryPiController:
         if cmd == self._last_lp_rly_cmd:
             logger.debug(f'LP-RLY cmd {"ON" if cmd else "OFF"} skipped — same as last')
             return
+        if not cmd:
+            self._lp_rly_manual_off_time = time.time()
+            self._lp_rly_motion_triggered = False
+        else:
+            self._lp_rly_manual_off_time = 0.0
+            self._lp_rly_motion_triggered = False
         self._last_lp_rly_cmd = cmd
         logger.info(f'Executing LP-RLY command: {"ON" if cmd else "OFF"}')
 
